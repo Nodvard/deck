@@ -49,8 +49,8 @@ function Hints({ data }: { data: VaultwardenStatus }) {
   }
   if (data.signups_open) {
     hints.push({
-      key: "signups", tone: "warn", label: "Registrierung offen",
-      text: "Jeder, der die Adresse kennt, kann ein Konto anlegen. Wenn dein Konto steht, in Vaultwarden SIGNUPS_ALLOWED=false setzen (oder in der Verwaltung unter /admin).",
+      key: "signups", tone: "neutral", label: "Registrierung prüfen",
+      text: "Vaultwarden meldet die Registrierung nicht als abgeschaltet. Steht SIGNUPS_ALLOWED noch auf true, kann jeder, der die Adresse kennt, ein Konto anlegen. Mit SIGNUPS_ALLOWED=false lehnt Vaultwarden neue Konten ab, zeigt das hier aber nicht an, solange Einladungen erlaubt sind. Nachsehen kannst du in Vaultwarden in der Verwaltung unter /admin.",
     });
   }
   if (data.domain_matches === false && data.domain) {
@@ -118,7 +118,7 @@ export function VaultwardenPage(): JSX.Element {
       </Card>
     );
   } else if (data) {
-    const signups = data.signups_open === true ? "offen" : data.signups_open === false ? "zu" : "unbekannt";
+    const signups = data.signups_open === true ? "prüfen" : data.signups_open === false ? "zu" : "unbekannt";
     body = (
       <div className="space-y-4">
         <div data-testid="stats" className="grid grid-cols-2 gap-3 lg:grid-cols-4">

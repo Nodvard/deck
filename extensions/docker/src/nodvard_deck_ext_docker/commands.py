@@ -120,6 +120,16 @@ def images() -> str:
     return _docker("images", "--format", "{{json .}}")
 
 
+def dangling_images() -> str:
+    """Images ohne Namen, also genau die, die `docker image prune` entfernt; Docker 29 lässt sie in `docker images` weg."""
+    return _docker("images", "--filter", "dangling=true", "--format", "{{json .}}")
+
+
+def image_names() -> str:
+    """Wie `images`, mit vollen IDs zum Abgleich mit `docker system df -v`."""
+    return _docker("images", "--no-trunc", "--format", "{{json .}}")
+
+
 def image_ids() -> str:
     return _docker("image", "ls", "-a", "-q", "--no-trunc")
 

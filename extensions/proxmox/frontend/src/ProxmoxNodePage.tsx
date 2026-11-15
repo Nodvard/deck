@@ -140,7 +140,7 @@ function scrollToElement(id: string): void {
   document.getElementById(id)?.scrollIntoView?.({ block: "center", behavior: "smooth" });
 }
 
-/** Proxmox zeigt Größen immer mit einer Nachkommastelle („2.0 GB“). */
+/** Proxmox-Größen: gebrochene Werte mit einer Nachkommastelle, ganze ohne („3.6 GB“, „2 GB“). */
 const formatBytes = (n: number): string => formatSize(n, { fixed: true });
 
 function formatUptime(seconds: number): string {

@@ -372,3 +372,26 @@ async def test_the_same_name_twice_at_once(client, docker_on):
 
     answers = await asyncio.gather(*(client.post(URL, headers=docker_on.owner, json={"name": "Web", "compose": PLAIN}) for _ in range(2)))
     assert sorted(a.status_code for a in answers) == [201, 409]
+
+
+@pytest.mark.asyncio
+async def test_broken_store_answer_never_carries_the_exception_text():
+    import httpx
+    from fastapi import FastAPI
+    from nodvard_deck_ext_docker import own_templates
+
+    marker = "dummy-geheimnis-aus-der-ausnahme"
+
+    class Broken:
+        async def all(self):
+            raise own_templates.StoreBroken(f"Traceback (most recent call last): {marker} /app/data/own_templates.json")
+
+    app = FastAPI()
+    app.include_router(own_templates.own_template_routes(Broken()))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        response = await http.get("/own-templates")
+    assert response.status_code == 200
+    assert marker not in response.text and "Traceback" not in response.text
+    assert response.json() == {"templates": [], "max": own_templates.MAX_TEMPLATES, "problem": own_templates.STORE_BROKEN}
+    assert own_templates.STORE_BROKEN.startswith("Die Datei mit den eigenen Vorlagen ist beschädigt.")
+    assert "own_templates.json.kaputt-…" in own_templates.STORE_BROKEN

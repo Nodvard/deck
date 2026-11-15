@@ -48,7 +48,7 @@ describe("Vaultwarden-Seite", () => {
     expect(screen.queryByRole("link", { name: "Web-Tresor öffnen" })).not.toBeInTheDocument();
   });
 
-  it("warnt bei HTTP, offener Registrierung und abweichender DOMAIN", async () => {
+  it("warnt bei HTTP und abweichender DOMAIN, nennt die Registrierung aber nicht offen", async () => {
     vi.stubGlobal("fetch", mockFetch({
       ...OK, url: "http://192.0.2.20:8222", https: false, signups_open: true, domain: "https://vault.example.org",
       domain_matches: false,
@@ -56,7 +56,11 @@ describe("Vaultwarden-Seite", () => {
     render(<VaultwardenPage />);
     const hints = within(await screen.findByTestId("hints"));
     expect(hints.getByText("ohne HTTPS")).toBeInTheDocument();
-    expect(hints.getByText("Registrierung offen")).toBeInTheDocument();
+    expect(hints.getByText("Registrierung prüfen")).toBeInTheDocument();
+    expect(hints.getByText(/SIGNUPS_ALLOWED=false lehnt Vaultwarden neue Konten ab/)).toBeInTheDocument();
+    expect(screen.queryByText(/Registrierung offen/)).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("stats")).getByText("prüfen")).toBeInTheDocument();
+    expect(within(screen.getByTestId("stats")).queryByText("offen")).not.toBeInTheDocument();
     expect(hints.getByText(/https:\/\/vault.example.org als Adresse eingetragen/)).toBeInTheDocument();
   });
 

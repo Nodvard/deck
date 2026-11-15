@@ -166,6 +166,38 @@ def test_parser_counts_nothing_in_a_login_page():
     assert (samples, total) == ([], 0)
 
 
+# Die Seite, mit der Uptime Kuma jede unbekannte Adresse beantwortet, gekürzt.
+APP_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Uptime Kuma</title>
+    <style>
+        .noscript-message {
+            font-size: 20px;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body>
+<div id="app"></div>
+</body>
+</html>
+"""
+
+
+def test_parser_counts_nothing_in_a_page_whose_css_reads_like_a_series():
+    assert metrics.parse_line("margin: 0 auto;") is not None, "die Zeile allein ist als Reihe lesbar"
+    assert metrics.parse_prometheus(APP_PAGE) == ([], 0)
+
+
+def test_parser_counts_series_without_comment_lines_only_if_a_monitor_is_among_them():
+    assert metrics.parse_prometheus("process_cpu_user_seconds_total 1.5\n") == ([], 0)
+    assert metrics.parse_prometheus("# TYPE process_cpu_user_seconds_total counter\nprocess_cpu_user_seconds_total 1.5\n") == ([], 1)
+    samples, total = metrics.parse_prometheus('process_cpu_user_seconds_total 1.5\nmonitor_status{monitor_name="x"} 1\n')
+    assert (len(samples), total) == (1, 2)
+
+
 def test_label_value_treats_null_and_empty_as_missing():
     assert metrics.label_value({"a": "null"}, "a") is None
     assert metrics.label_value({"a": " "}, "a") is None
@@ -851,6 +883,13 @@ async def test_metrics_answers_that_are_not_metrics(client, db_session, test_set
     fake.overrides["/metrics"] = lambda request: httpx.Response(200, text="<html><body>Anmelden</body></html>")
     connection = _only(await _overview(client, headers))
     assert connection["state"] == "error" and "liefert unter /metrics keine Messwerte" in connection["message"]
+
+    service.clear()
+    fake.overrides["/metrics"] = lambda request: httpx.Response(200, text=APP_PAGE, headers={"Content-Type": "text/html; charset=utf-8"})
+    connection = _only(await _overview(client, headers))
+    assert connection["state"] == "error" and "liefert unter /metrics keine Messwerte" in connection["message"]
+    assert connection["monitors"] == []
+    assert (await _widget(client, headers))["data"][0]["label"] == "Fehler"
 
     service.clear()
     fake.overrides["/metrics"] = lambda request: httpx.Response(502, text="Bad Gateway")

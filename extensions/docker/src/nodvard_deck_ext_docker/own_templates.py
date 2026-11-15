@@ -31,6 +31,8 @@ MAX_COMPOSE = 64 * 1024
 MAX_NAME = 60
 MAX_SUMMARY = 300
 MAX_FINDINGS = 5
+STORE_BROKEN = ("Die Datei mit den eigenen Vorlagen ist beschädigt. Beim nächsten Speichern einer Vorlage wird sie als "
+                f"{STORE_FILE}.kaputt-… beiseitegelegt und eine neue Liste begonnen.")
 
 _ID_RE = re.compile(r"^[0-9a-f]{16}\Z")
 _NAME_RE = re.compile(r"-{0,2}[\w.-]{1,60}")
@@ -303,10 +305,7 @@ class OwnTemplates:
             log.warning("docker_templates_broken path=%s", self._path)
             aside = self._path.with_name(f"{self._path.name}.kaputt-{datetime.now(UTC):%Y%m%d%H%M%S}")
             if not before_write:
-                raise StoreBroken(
-                    "Die Datei mit den eigenen Vorlagen ist beschädigt. Beim nächsten Speichern einer Vorlage wird sie als "
-                    f"{STORE_FILE}.kaputt-… beiseitegelegt und eine neue Liste begonnen."
-                ) from exc
+                raise StoreBroken(STORE_BROKEN) from exc
             try:
                 os.replace(self._path, aside)
             except OSError as move:
@@ -416,8 +415,8 @@ def own_template_routes(store: OwnTemplates) -> APIRouter:
         """Die eigenen Vorlagen nach Namen sortiert, ohne Compose-Datei; `problem` nennt eine beschädigte Datei."""
         try:
             return {"templates": [_listed(t) for t in await store.all()], "max": MAX_TEMPLATES, "problem": None}
-        except StoreBroken as exc:
-            return {"templates": [], "max": MAX_TEMPLATES, "problem": str(exc)}
+        except StoreBroken:
+            return {"templates": [], "max": MAX_TEMPLATES, "problem": STORE_BROKEN}
         except StoreProblem as exc:
             raise _unavailable(exc) from None
 

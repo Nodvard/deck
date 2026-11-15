@@ -434,9 +434,10 @@ def _error_tile(host: Any, message: str) -> dict[str, Any]:
     }
 
 
-def _tone_for_state(state: str) -> str:
+def _tone_for_state(state: str, status: str = "") -> str:
+    """Farbe einer Zeile: ein laufender Container mit gescheitertem Healthcheck ist nicht grün."""
     if state == "running":
-        return "good"
+        return "warn" if "(unhealthy)" in status else "good"
     if state in ("restarting", "paused"):
         return "warn"
     return "neutral"
@@ -532,7 +533,7 @@ class DockerServiceCatalog:
                     "compose_project": project or None,
                     "state": state,
                     "status": status_str,
-                    "tone": _tone_for_state(state),
+                    "tone": _tone_for_state(state, status_str),
                     "url": custom or detected,
                     # Was Nodvard Deck selbst erkannt hat, und ob der Nutzer die Adresse überschrieben hat.
                     "url_detected": detected,

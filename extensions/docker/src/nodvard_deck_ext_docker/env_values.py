@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
-import re
 import secrets
 import shlex
+import string
 from typing import Any
 
-_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+MAX_NAME_LENGTH = 255
+_NAME_START = frozenset(string.ascii_letters + "_")
+_NAME_REST = _NAME_START | frozenset(string.digits)
+
+
+def valid_env_name(name: str) -> bool:
+    return 0 < len(name) <= MAX_NAME_LENGTH and name[0] in _NAME_START and all(c in _NAME_REST for c in name)
 
 
 def env_file(values: dict[str, str]) -> bytes:
@@ -20,7 +26,9 @@ def env_file(values: dict[str, str]) -> bytes:
         raise ValueError("Höchstens 100 Variablen sind erlaubt.")
     lines = []
     for name, value in values.items():
-        if not _NAME.fullmatch(name):
+        if len(name) > MAX_NAME_LENGTH:
+            raise ValueError(f"Variablennamen dürfen höchstens {MAX_NAME_LENGTH} Zeichen lang sein.")
+        if not valid_env_name(name):
             raise ValueError("Variablennamen dürfen nur Buchstaben ohne Umlaute, Ziffern und „_“ enthalten und nicht mit einer Ziffer beginnen.")
         if any(ord(c) < 32 and c not in "\n\r\t" or ord(c) == 127 for c in value):
             raise ValueError(f"Die Variable {name} enthält ein unzulässiges Steuerzeichen.")
@@ -32,7 +40,7 @@ def env_file(values: dict[str, str]) -> bytes:
 
 
 def valid_env_names(names: Any) -> bool:
-    return isinstance(names, (list, tuple)) and len(names) <= 100 and all(isinstance(name, str) and _NAME.fullmatch(name) for name in names)
+    return isinstance(names, (list, tuple)) and len(names) <= 100 and all(isinstance(name, str) and valid_env_name(name) for name in names)
 
 
 def with_saved_env(argv: list[str], names: tuple[str, ...]) -> list[str]:

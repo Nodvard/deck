@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .sysinfo import DF_CMD, df_state, parse_network_mounts
+
 # Raten (CPU, Platten- und Netz-Durchsatz, Prozess-CPU) brauchen zwei Messpunkte: Das Skript liest die Zähler, schläft 1
 # s und liest sie erneut. Die echte Zeitspanne kommt aus `/proc/uptime`, nicht aus der Annahme „genau 1 s“.
 _SNAPSHOT = r"""echo @@t{n}; cut -d' ' -f1 /proc/uptime
@@ -26,11 +28,11 @@ echo @@freq; for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq
 echo @@temps; for z in /sys/class/thermal/thermal_zone*; do [ -r "$z/temp" ] && echo "zone $(cat $z/type) $(cat $z/temp)"; done 2>/dev/null; for h in /sys/class/hwmon/hwmon*; do n=$(cat $h/name 2>/dev/null); for t in $h/temp*_input; do [ -r "$t" ] || continue; l=${t%_input}_label; if [ -r "$l" ]; then lab=$(cat $l); else lab=$(basename ${t%_input}); fi; echo "hwmon $n|$lab|$(cat $t)"; done; done 2>/dev/null
 echo @@fans; for h in /sys/class/hwmon/hwmon*; do n=$(cat $h/name 2>/dev/null); for t in $h/fan*_input; do [ -r "$t" ] || continue; echo "$n|$(basename ${t%_input})|$(cat $t)"; done; done 2>/dev/null
 echo @@links; for n in /sys/class/net/*; do echo "$(basename $n) $(cat $n/speed 2>/dev/null || echo -) $(cat $n/operstate 2>/dev/null)"; done
-echo @@fs; df -P -T -x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs 2>/dev/null | tail -n +2
+echo @@fs; {DF_CMD}
 echo @@users; ps -eo pid=,user= 2>/dev/null
 echo @@throttled; vcgencmd get_throttled 2>/dev/null
 echo @@end
-"""
+""".replace("{DF_CMD}", DF_CMD)
 )
 
 _KB = 1024
@@ -311,6 +313,8 @@ def parse_live(text: str) -> dict[str, Any]:
         "disks": disks,
         "network": network,
         "filesystems": filesystems,
+        "network_mounts": parse_network_mounts(s.get("netmounts", [])),
+        **df_state(s),
         "processes": processes[:25],
         "process_count": len(p1),
         "throttled": _throttled(s.get("throttled", [])),

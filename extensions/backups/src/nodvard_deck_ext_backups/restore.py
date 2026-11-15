@@ -418,9 +418,9 @@ def describe_config(kind: str, config: dict[str, str] | None) -> BackupInfo:
 
 
 def gb(value: float) -> str:
-    """Wie `formatBytes` der Seite: unter 10 GB eine Nachkommastelle, darüber keine."""
+    """Wie `formatBytes` der Seite: unter 10 GB eine Nachkommastelle, ganze Werte ohne."""
     amount = value / 1024**3
-    return f"{amount:.1f} GB" if amount < 10 else f"{amount:.0f} GB"
+    return f"{amount:.1f}".removesuffix(".0") + " GB" if amount < 10 else f"{amount:.0f} GB"
 
 
 def needed_bytes(backup_size: int, disk_bytes: int | None, storage_type: str | None) -> int:

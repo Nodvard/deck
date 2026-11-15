@@ -158,7 +158,7 @@ async def list_host_requirements(host_id: str, session: SessionDep) -> list[Host
 
 class GenerateKeyIn(RequestModel):
     # Die Oberfläche nennt neue Zugänge „nodvard“ und schickt den Namen immer mit. Der API-Standard bleibt bewusst
-    # „lattice“: ältere Aufrufer (auch die App) schicken oft keinen Namen, ein anderer Standard änderte für sie still
+    # „lattice“: ältere Aufrufer schicken oft keinen Namen, ein anderer Standard änderte für sie still
     # den Benutzer auf dem Server. Ändern nur nach angekündigter Übergangszeit (docs/04-API.md, „Kompatibilität“).
     username: str = "lattice"
     port: int = 22

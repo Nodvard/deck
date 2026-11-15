@@ -5,10 +5,33 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Rein lesend und ohne root: `apt list --upgradable` liest nur die vorhandenen Paketlisten (Stand der letzten
-# Aktualisierung durch den Server selbst). Die Abschnitte mit `@@name` sorgen dafür, dass ein fehlender Befehl (kein
-# systemd, kein apt) nur seinen eigenen Abschnitt leer lässt.
-SCRIPT = r"""echo @@os; (. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME")
+# Ohne root und ohne Änderung am Server: `apt list --upgradable` liest nur die vorhandenen Paketlisten (Stand der letzten
+# Aktualisierung durch den Server selbst). Einzige Ausnahme ist eine kurzlebige Datei von `mktemp` für `df`. Die
+# Abschnitte mit `@@name` sorgen dafür, dass ein fehlender Befehl (kein systemd, kein apt) nur seinen eigenen Abschnitt
+# leer lässt.
+# `df` läuft im Hintergrund in diese Datei und wird nach 5 s abgeschossen: Ein hängendes Netzlaufwerk leert nur den
+# Platten-Abschnitt (`@@dfstatus`: ok, timeout, failed oder unavailable; ein Exit-Code ungleich 0 mit gelieferten Zeilen zählt als ok, `df` meldet so einzelne unlesbare Einhängungen), und das Skript wartet nie auf den Prozess und
+# hält keine Leitung offen. Scheitert `mktemp`, läuft `df` gar nicht, einen festen Ersatzpfad gibt es mit Absicht nicht.
+# Netzlaufwerke werden nicht abgefragt, sondern nur aus /proc/mounts aufgelistet. Keine Variable als Befehl (zsh).
+_DF_EXCLUDES = "-x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs -x ramfs -x iso9660 -x udf -x nfs -x nfs4 -x cifs -x smb3 -x fuse.sshfs"
+DF_CMD = (
+    'dfs=unavailable; dff=$(mktemp 2>/dev/null)\n'
+    'if [ -n "$dff" ]; then\n'
+    "  trap 'kill -9 $dfp 2>/dev/null; unlink \"$dff\" 2>/dev/null; exit 1' INT TERM HUP\n"
+    f'  df -P -T {_DF_EXCLUDES} >"$dff" 2>/dev/null </dev/null &\n'
+    "  dfp=$!; dfi=0; dfstep=0.2; dfmax=25\n"
+    "  sleep 0.01 2>/dev/null || { dfstep=1; dfmax=5; }\n"
+    '  while kill -0 $dfp 2>/dev/null && [ $dfi -lt $dfmax ]; do sleep $dfstep; dfi=$((dfi+1)); done\n'
+    '  if kill -0 $dfp 2>/dev/null; then kill -9 $dfp 2>/dev/null; dfs=timeout\n'
+    '  elif wait $dfp || [ -n "$(tail -n +2 "$dff")" ]; then dfs=ok; else dfs=failed; fi\n'
+    '  dfp=; tail -n +2 "$dff"; unlink "$dff" 2>/dev/null; trap - INT TERM HUP\n'
+    'fi\n'
+    'echo @@dfstatus; echo $dfs\n'
+    "echo @@netmounts; awk '$3==\"nfs\"||$3==\"nfs4\"||$3==\"cifs\"||$3==\"smb3\"||$3==\"fuse.sshfs\" {print $3, $2, $1}' /proc/mounts 2>/dev/null"
+)
+
+# `LC_ALL=C`: apt übersetzt die Marke „upgradable“ sonst in die Sprache des Servers, und `grep` fände nichts.
+_SCRIPT_TEMPLATE = r"""echo @@os; (. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME")
 echo @@kernel; uname -r
 echo @@arch; uname -m
 echo @@hostname; hostname
@@ -17,15 +40,17 @@ echo @@load; cut -d' ' -f1-3 /proc/loadavg
 echo @@cpus; nproc 2>/dev/null
 echo @@cpu; head -1 /proc/stat; sleep 1; head -1 /proc/stat
 echo @@mem; grep -E '^(MemTotal|MemAvailable|SwapTotal|SwapFree):' /proc/meminfo
-echo @@disks; df -P -T -x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs 2>/dev/null | tail -n +2
+echo @@disks; {DF_CMD}
 echo @@failed; systemctl list-units --state=failed --no-legend --plain 2>/dev/null | awk '{print $1}'
 echo @@services; systemctl list-units --type=service --state=running --no-legend --plain 2>/dev/null | awk '{print $1}'
-echo @@updates; if command -v apt >/dev/null 2>&1; then apt list --upgradable 2>/dev/null | grep upgradable | cut -d' ' -f1; else echo @unsupported; fi
+echo @@updates; if command -v apt >/dev/null 2>&1; then LC_ALL=C apt list --upgradable 2>/dev/null | grep upgradable | cut -d' ' -f1; else echo @unsupported; fi
 echo @@reboot; if [ -f /var/run/reboot-required ]; then echo yes; else echo no; fi
 echo @@kernels; ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#.*/vmlinuz-##'
 echo @@temp; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null
 echo @@end
 """
+SCRIPT = _SCRIPT_TEMPLATE.replace("{DF_CMD}", DF_CMD)
+
 
 _KB = 1024
 
@@ -107,13 +132,17 @@ def _disk_tone(percent: float) -> str:
     return "danger" if percent >= 90 else "warn" if percent >= 80 else "good"
 
 
+def _ascii_digits(text: str) -> bool:
+    return text.isascii() and text.isdigit()
+
+
 def parse_disks(lines: list[str]) -> list[dict[str, Any]]:
     """Zeilen von `df -P -T` (ohne Kopfzeile) -> Dateisysteme mit Belegung und Ton."""
     disks = []
     for line in lines:
         parts = line.split()
         # `df -P -T`: Gerät, Typ, Größe, belegt, frei, Prozent, Einhängepunkt (in 1K-Blöcken)
-        if len(parts) < 7 or not parts[2].isdigit():
+        if len(parts) < 7 or not all(_ascii_digits(parts[i]) for i in (2, 3, 4)):
             continue
         size, used, avail = (int(parts[i]) * _KB for i in (2, 3, 4))
         percent = round(100.0 * used / (used + avail), 1) if used + avail else 0.0
@@ -122,6 +151,29 @@ def parse_disks(lines: list[str]) -> list[dict[str, Any]]:
             "size": size, "used": used, "available": avail, "percent": percent, "tone": _disk_tone(percent),
         })
     return disks
+
+
+_OCTAL = re.compile(r"\\([0-7]{3})")
+
+
+def _unescape(text: str) -> str:
+    return _OCTAL.sub(lambda m: chr(int(m.group(1), 8)), text)
+
+
+def parse_network_mounts(lines: list[str]) -> list[dict[str, str]]:
+    """Zeilen `Typ Einhängepunkt Quelle` aus /proc/mounts (Leerzeichen als \\040) -> Netzlaufwerke ohne Messwerte."""
+    mounts = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) >= 3:
+            mounts.append({"fstype": parts[0], "mount": _unescape(parts[1]), "device": _unescape(parts[2])})
+    return mounts
+
+
+def df_state(sections: dict[str, list[str]]) -> dict[str, Any]:
+    """Wie `df` endete (`df_status`: ok, timeout, failed, unavailable; ohne Marke None) und ob das ein Fehler war."""
+    status = _first(sections, "dfstatus")
+    return {"df_status": status, "df_failed": status not in (None, "ok")}
 
 
 def parse_system_info(text: str) -> dict[str, Any]:
@@ -167,6 +219,8 @@ def parse_system_info(text: str) -> dict[str, Any]:
         "swap_total": mem.get("SwapTotal"),
         "swap_used": (mem["SwapTotal"] - mem["SwapFree"]) if "SwapTotal" in mem and "SwapFree" in mem else None,
         "disks": disks,
+        "network_mounts": parse_network_mounts(s.get("netmounts", [])),
+        **df_state(s),
         "failed_units": [u for u in s.get("failed", []) if u.strip()],
         "running_units": sorted({u.strip() for u in s.get("services", []) if u.strip().endswith(".service")}),
         "updates": updates,
@@ -186,12 +240,21 @@ def apply_thresholds(info: dict[str, Any], disk_percent: float, temp_c: float) -
     info["temperature_tone"] = "warn" if temp is not None and temp >= temp_c else "good"
 
 
+_DF_FINDINGS = {
+    "timeout": "Plattenbelegung nicht gelesen: keine Antwort in der Zeitgrenze, wahrscheinlich hängt ein Laufwerk",
+    "unavailable": "Plattenbelegung konnte auf dem Server nicht gemessen werden",
+}
+
+
 def summary_findings(info: dict[str, Any]) -> list[dict[str, str]]:
     """Was Aufmerksamkeit braucht, mit denselben Schwellen wie die Anzeige."""
     findings: list[dict[str, str]] = []
     for disk in info.get("disks", []):
         if disk["tone"] != "good":
             findings.append({"tone": disk["tone"], "text": f"{disk['mount']} zu {disk['percent']:.0f} % voll"})
+    if info.get("df_failed"):
+        text = _DF_FINDINGS.get(info.get("df_status") or "", "Plattenbelegung konnte nicht gelesen werden")
+        findings.append({"tone": "warn", "text": text})
     if info.get("failed_units"):
         findings.append({"tone": "danger", "text": f"{len(info['failed_units'])} Dienst(e) fehlgeschlagen: {', '.join(info['failed_units'][:5])}"})
     if info.get("swap_total") and info.get("swap_used") is not None and info["swap_used"] / info["swap_total"] >= 0.5:

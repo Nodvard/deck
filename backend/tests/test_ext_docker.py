@@ -126,6 +126,40 @@ async def test_lists_running_and_stopped_containers_with_tone():
 
 
 @pytest.mark.asyncio
+async def test_an_unhealthy_container_is_not_green():
+    host = _FakeHost("h1", "server-a", "192.0.2.10")
+    ctx = _FakeCtx(
+        settings={},
+        hosts=[host],
+        outputs={"h1": _FakeExecResult(0, "\n".join([
+            _ps_line("web", "running", "Up 18 hours (unhealthy)", "0.0.0.0:8080->80/tcp", project="shop"),
+            _ps_line("db", "running", "Up 18 hours (healthy)", "5432/tcp", project="shop"),
+            _ps_line("cache", "running", "Up 18 hours", project="shop"),
+            _ps_line("fresh", "running", "Up 4 seconds (health: starting)", project="shop"),
+            _ps_line("job", "exited", "Exited (0) 2 weeks ago", project="shop"),
+        ]))},
+    )
+    tones = {s["name"]: s["tone"] for s in await _catalog(ctx).list_services()}
+    assert tones == {"web": "warn", "db": "good", "cache": "good", "fresh": "good", "job": "neutral"}
+
+
+@pytest.mark.asyncio
+async def test_the_dashboard_tile_of_an_unhealthy_container_is_not_green(client, docker_on, monkeypatch):
+    lines = [
+        _ps_line("web", "running", "Up 18 hours (unhealthy)", project="shop"),
+        _ps_line("db", "running", "Up 18 hours (healthy)", project="shop"),
+    ]
+
+    async def run(host, command, timeout_s=60):
+        return _FakeExecResult(0, "\n".join(lines))
+
+    monkeypatch.setattr(docker_on.handle, "run", run)
+    resp = await client.get("/api/v1/ext/docker/widgets/matrix", headers=docker_on.owner)
+    assert resp.status_code == 200, resp.text
+    assert {row["name"]: row["tone"] for row in resp.json()["data"]} == {"web": "warn", "db": "good"}
+
+
+@pytest.mark.asyncio
 async def test_lines_without_enough_fields_or_a_name_are_skipped():
     host = _FakeHost("h1", "docker", "10.0.0.5")
     lines = ["kaputt|zeile|running", _ps_line("", "running", "Up 2 hours"), _ps_line("nginx", "running", "Up 2 hours")]
@@ -1440,6 +1474,32 @@ async def test_container_diagnostics_hide_remote_errors(client, docker_on, monke
     assert match and match[1] in caplog.text
     assert "vertraulich-docker" not in response.text + caplog.text
     assert "/run/private" not in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("dangling_code", "expected"), [(0, ["368f633203d4", "f6ded99b9c2f"]), (1, ["f6ded99b9c2f"])])
+async def test_storage_route_lists_dangling_images(client, docker_on, monkeypatch, dangling_code, expected):
+    from nodvard_deck_ext_docker import commands
+
+    df = '{"Type":"Images","TotalCount":"2","Active":"1","Size":"669MB","Reclaimable":"11.3MB (1%)"}\n'
+    named = '{"ID":"f6ded99b9c2f","Repository":"app-a","Tag":"latest","Size":"658MB","Containers":"1"}\n'
+    dangling = '{"ID":"368f633203d4","Repository":"<none>","Tag":"<none>","Size":"11.3MB","Containers":"0"}\n'
+    answers = {
+        commands.system_df(): fakes.result(df), commands.images(): fakes.result(named),
+        commands.dangling_images(): fakes.result(dangling, "boom" if dangling_code else "", dangling_code),
+    }
+
+    async def run(host, command, timeout_s=60):
+        return answers[command]
+
+    monkeypatch.setattr(docker_on.handle, "run", run)
+
+    answer = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/docker", headers=docker_on.owner)
+
+    assert answer.status_code == 200, answer.text
+    images = answer.json()["images"]
+    assert [i["id"] for i in images] == expected
+    assert [i["dangling"] for i in images] == [True, False][-len(expected):]
 
 
 @pytest.mark.asyncio

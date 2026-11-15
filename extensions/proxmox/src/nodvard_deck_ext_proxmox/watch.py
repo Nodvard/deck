@@ -18,6 +18,7 @@ from .node_health import (
     TEMP_HYSTERESIS,
     collect_disks,
     collect_zfs,
+    smart_unknown,
     temperature_limit,
     temperature_setting,
 )
@@ -474,13 +475,16 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
             for disk in disks:
                 # Temperatur nicht hier: sie schwankt und hat eine eigene Prüfung mit Abstand (`check_temperature`).
                 bad = disk["tone"] in ("danger", "warn") and not disk["badge"].endswith("°C")
-                await handle(
-                    f"disk:{conn_name}/{node_name}/{disk['devpath']}", bad, DISK_STREAK,
-                    (Severity.CRITICAL if disk["tone"] == "danger" else Severity.WARNING,
-                     f"Datenträger auf {node_name}: {disk['badge']}",
-                     f"{disk['model']} ({disk['devpath']}) -- {disk['summary']}. Einzige Platte des Knotens? Dann Backup prüfen."),
-                    f"Datenträger auf {node_name} wieder unauffällig", node_host_id,
-                )
+                key = f"disk:{conn_name}/{node_name}/{disk['devpath']}"
+                # Ohne SMART-Auskunft ist ein gemeldeter Defekt nicht behoben: weder Entwarnung noch neue Meldung.
+                if bad or not (smart_unknown(disk["health"]) and state.alerted(key)):
+                    await handle(
+                        key, bad, DISK_STREAK,
+                        (Severity.CRITICAL if disk["tone"] == "danger" else Severity.WARNING,
+                         f"Datenträger auf {node_name}: {disk['badge']}",
+                         f"{disk['model']} ({disk['devpath']}) -- {disk['summary']}. Einzige Platte des Knotens? Dann Backup prüfen."),
+                        f"Datenträger auf {node_name} wieder unauffällig", node_host_id,
+                    )
                 await check_temperature(conn_name, node_name, node_host_id, disk)
             try:
                 pools = await collect_zfs(connector, node_name)

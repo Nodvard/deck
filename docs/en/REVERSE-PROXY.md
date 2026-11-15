@@ -287,6 +287,12 @@ safest choice (section 6).
   network.
 - The sign-in cookie gets `Secure` automatically as soon as the request came over HTTPS. The environment variable
   `NODVARD_DECK_COOKIE_SECURE` (`true`/`false`) still forces it if you need that.
+- Over HTTPS, Nodvard Deck sends `Strict-Transport-Security`. The browser remembers it for one year for the host
+  name, whatever the port. If other services run under the same name over plain http (for example Deck at
+  `https://name:8443` and another service at `http://name:8081`), the browser can no longer reach them afterwards.
+  The environment variable `NODVARD_DECK_HSTS=false` turns the header off; it is on by default. Whatever the browser
+  has already remembered stays until it expires or until you clear it there for that site.
+  The switch also applies to the rescue page, which runs instead of the interface after a failed start.
 - The image starts uvicorn with `--no-proxy-headers`. If you used to set `FORWARDED_ALLOW_IPS`, it no longer has an
   effect. Enter your proxy's address under Settings → System → Trusted proxy instead (section 4). If you start the
   container with your own `command:`, keep `--no-proxy-headers` in it, otherwise uvicorn evaluates the headers itself

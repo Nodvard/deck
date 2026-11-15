@@ -87,7 +87,7 @@ export function ago(seconds: number | null | undefined): string {
 }
 
 function size(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1).replace(/\.0$/, "")} GB`;
   if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
   return `${Math.round(bytes / 1e3)} KB`;
 }
@@ -285,7 +285,7 @@ function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction
         <Stat label="Welt gespeichert" value={<span className="text-xl">{ago(d.last_save_age_s)}</span>} sub={d.world?.name ? `${d.world.name} · ${size(d.world.size)}` : undefined} />
         <Stat
           label="Server-Prozess"
-          value={<span className="text-xl">{d.process ? `${(d.process.ram_mb / 1024).toFixed(1)} GB` : "–"}</span>}
+          value={<span className="text-xl">{d.process ? `${(d.process.ram_mb / 1024).toFixed(1).replace(/\.0$/, "")} GB` : "–"}</span>}
           sub={d.process ? `RAM · ${d.process.responding ? "reagiert" : "reagiert nicht"}` : unknown ? "nicht abrufbar" : "läuft nicht"}
         />
       </div>

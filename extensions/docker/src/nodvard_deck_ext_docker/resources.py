@@ -25,6 +25,7 @@ CACHE_TTL_S = 15.0
 """Die drei Listen teilen sich einen Abruf; wer zwischen den Reitern wechselt, löst keinen neuen aus."""
 DF_TIMEOUT_S = 60
 NETWORKS_TIMEOUT_S = 20
+IMAGES_TIMEOUT_S = 30
 BUILTIN_NETWORKS = frozenset({"bridge", "host", "none"})
 _ANONYMOUS_LABEL = "com.docker.volume.anonymous"
 _PROJECT_LABEL = "com.docker.compose.project"
@@ -95,7 +96,29 @@ def _rollback_copy(names: list[str]) -> bool:
     return False
 
 
-def parse_images(df: dict[str, Any]) -> list[dict[str, Any]]:
+def _unnamed(df: dict[str, Any]) -> bool:
+    return any((row.get("Repository") or "<none>") == "<none>" for row in _rows(df.get("Images")))
+
+
+def parse_image_names(text: str) -> dict[str, list[str]]:
+    """`docker images --no-trunc --format '{{json .}}'` -> Namen je Image-ID; ohne Tag bleibt das Repository."""
+    names: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        repo, tag = row.get("Repository") or "", row.get("Tag") or ""
+        if row.get("ID") and repo and repo != "<none>":
+            names.setdefault(str(row["ID"]), []).append(f"{repo}:{tag}" if tag and tag != "<none>" else repo)
+    return names
+
+
+def parse_images(df: dict[str, Any], listed: dict[str, list[str]] | None = None) -> list[dict[str, Any]]:
+    """`listed` sind die Namen aus `docker images`: ein per Prüfsumme geholtes Image nennt `docker system df -v`
+    ohne Repository, verwaist ist es für Docker aber nicht."""
     containers = _rows(df.get("Containers"))
     grouped: dict[str, dict[str, Any]] = {}
     for row in _rows(df.get("Images")):
@@ -113,7 +136,7 @@ def parse_images(df: dict[str, Any]) -> list[dict[str, Any]]:
             entry["names"].append(f"{repo}:{tag}" if tag and tag != "<none>" else repo)
     images = []
     for entry in grouped.values():
-        entry["names"] = sorted(set(entry["names"]))
+        entry["names"] = sorted(set(entry["names"] or (listed or {}).get(entry["id"], [])))
         entry["used_by"] = _image_users(entry["names"], entry["id"], containers)
         entry["in_use"] = _used(entry["containers"], entry["used_by"])
         entry["dangling"] = not entry["names"]
@@ -233,7 +256,20 @@ class DockerResources:
                 networks = parse_networks(listed.stdout, data)
             else:
                 network_error = _first_line(listed.stderr) or f"docker network ls endete mit {listed.exit_code}."
-        return Snapshot(parse_images(data), parse_volumes(data), networks, network_error, parse_containers(data))
+        return Snapshot(
+            parse_images(data, await self._image_names(host, data)), parse_volumes(data), networks, network_error,
+            parse_containers(data),
+        )
+
+    async def _image_names(self, host: Any, df: dict[str, Any]) -> dict[str, list[str]]:
+        """Fragt nur nach, wenn `docker system df -v` ein Image ohne Repository nennt."""
+        if not _unnamed(df):
+            return {}
+        try:
+            listed = await self._ctx.exec.run(host, commands.image_names(), timeout_s=IMAGES_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - die Listen bleiben brauchbar
+            return {}
+        return parse_image_names(listed.stdout) if listed.exit_code == 0 else {}
 
     def forget(self, host_id: str) -> None:
         self._cache.pop(host_id, None)

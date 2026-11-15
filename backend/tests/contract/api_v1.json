@@ -7252,6 +7252,9 @@
              "unsupported"
             ],
             "type": "string"
+           },
+           "unrated": {
+            "type": "null|object"
            }
           },
           "type": "null|object"
@@ -8020,6 +8023,29 @@
         "fields": {
          "certificates": {
           "type": "null"
+         },
+         "certificates_checked_at": {
+          "type": "null|number"
+         },
+         "expiring_certificates": {
+          "items": {
+           "fields": {
+            "days_remaining": {
+             "type": "number"
+            },
+            "expires_at": {
+             "type": "number"
+            },
+            "hostname": {
+             "type": "string"
+            },
+            "port": {
+             "type": "integer"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
          },
          "fail2ban": {
           "fields": {
@@ -11547,6 +11573,9 @@
              "unsupported"
             ],
             "type": "string"
+           },
+           "unrated": {
+            "type": "null|object"
            }
           },
           "type": "null|object"
@@ -12315,6 +12344,29 @@
         "fields": {
          "certificates": {
           "type": "null"
+         },
+         "certificates_checked_at": {
+          "type": "null|number"
+         },
+         "expiring_certificates": {
+          "items": {
+           "fields": {
+            "days_remaining": {
+             "type": "number"
+            },
+            "expires_at": {
+             "type": "number"
+            },
+            "hostname": {
+             "type": "string"
+            },
+            "port": {
+             "type": "integer"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
          },
          "fail2ban": {
           "fields": {
@@ -18880,6 +18932,23 @@
           "unsupported"
          ],
          "type": "string"
+        },
+        "unrated": {
+         "fields": {
+          "foreign": {
+           "type": "integer"
+          },
+          "no_fix": {
+           "type": "integer"
+          },
+          "undetermined": {
+           "type": "integer"
+          },
+          "unimportant": {
+           "type": "integer"
+          }
+         },
+         "type": "null|object"
         }
        },
        "type": "null|object"
@@ -19113,6 +19182,23 @@
           "unsupported"
          ],
          "type": "string"
+        },
+        "unrated": {
+         "fields": {
+          "foreign": {
+           "type": "integer"
+          },
+          "no_fix": {
+           "type": "integer"
+          },
+          "undetermined": {
+           "type": "integer"
+          },
+          "unimportant": {
+           "type": "integer"
+          }
+         },
+         "type": "null|object"
         }
        },
        "type": "null|object"
@@ -25015,6 +25101,23 @@
           "unsupported"
          ],
          "type": "string"
+        },
+        "unrated": {
+         "fields": {
+          "foreign": {
+           "type": "integer"
+          },
+          "no_fix": {
+           "type": "integer"
+          },
+          "undetermined": {
+           "type": "integer"
+          },
+          "unimportant": {
+           "type": "integer"
+          }
+         },
+         "type": "null|object"
         }
        },
        "type": "null|object"
@@ -29003,6 +29106,23 @@
           "unsupported"
          ],
          "type": "string"
+        },
+        "unrated": {
+         "fields": {
+          "foreign": {
+           "type": "integer"
+          },
+          "no_fix": {
+           "type": "integer"
+          },
+          "undetermined": {
+           "type": "integer"
+          },
+          "unimportant": {
+           "type": "integer"
+          }
+         },
+         "type": "null|object"
         }
        },
        "type": "null|object"

@@ -7,6 +7,7 @@ from __future__ import annotations
 from http import HTTPStatus
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Mapping
 from typing import Any
 from urllib.parse import quote, urlencode, urlsplit
@@ -102,6 +103,35 @@ def status_error(status_code: int) -> str | None:
     if status_code >= 500:
         return f"Der ntfy-Server meldet einen Fehler (HTTP {status_code}). Versuche es später erneut."
     return f"ntfy hat unerwartet geantwortet (HTTP {status_code})."
+
+
+# Themennamen, die ntfy annimmt.
+_TOPIC_NAME = re.compile(r"[-_A-Za-z0-9]{1,64}")
+
+TOPIC_NAME_TEXT = (
+    "Dieses Thema nimmt ntfy nicht an. Erlaubt sind Buchstaben ohne Umlaute, Ziffern, Bindestrich und Unterstrich, "
+    "höchstens 64 Zeichen und keine Leerzeichen. Ändere das Thema in den Einstellungen."
+)
+
+
+def topic_error(status_code: int) -> str | None:
+    """Fertiger Satz, wenn ntfy das Thema nicht kennt oder nicht annimmt."""
+    if status_code in (400, 404):
+        return (
+            f"Der ntfy-Server ist erreichbar, kennt das Thema aber so nicht (HTTP {status_code}). Manche Namen sind "
+            "bei ntfy vergeben, zum Beispiel „docs“. Wähle in den Einstellungen ein anderes Thema."
+        )
+    return None
+
+
+# ntfy beantwortet die Frage nach dem Thema mit dem Leserecht; ein Token, das nur schreiben darf, bekommt 401 oder 403.
+WRITE_ONLY_NOTE = (
+    "Der ntfy-Server ist erreichbar und das Thema wird angenommen. Ob Senden erlaubt ist, lässt sich ohne echte "
+    "Nachricht nicht prüfen: Das zeigt „Testnachricht senden“."
+)
+TOKEN_REJECTED_TEXT = (
+    "ntfy hat das Zugriffstoken abgelehnt (HTTP 401). Prüfe das Token in den Einstellungen, es ist falsch oder abgelaufen."
+)
 
 
 def _url_is_valid(url: str) -> bool:
@@ -431,22 +461,47 @@ class _NtfyChannel:
             raise NtfyError(problem)
 
     async def test(self) -> ConnectorHealth:
-        """Fragt den ntfy-Server, ohne etwas zu senden; die Adressen weiterer Kanäle prüft `health()`."""
+        """Fragt den ntfy-Server und das Thema, ohne etwas zu senden; weitere Kanäle prüft `health()`."""
+        return (await self.check())[0]
+
+    async def check(self) -> tuple[ConnectorHealth, str]:
+        """Ergebnis von `test()` und die Art des Satzes: `""`, `"verbatim"` (unverändert zeigen) oder `"note"` (Hinweis)."""
         settings = await self._ctx.settings.get()
         if not ntfy_configured(settings) and channel_entries(settings):
-            return ConnectorHealth(ok=True, message="ntfy ist nicht eingerichtet, nur weitere Kanäle.")
+            return ConnectorHealth(ok=True, message="ntfy ist nicht eingerichtet, nur weitere Kanäle."), ""
         try:
-            server_url, _ = self._config(settings)
+            server_url, topic = self._config(settings)
         except RuntimeError as exc:
-            return ConnectorHealth(ok=False, message=str(exc))
+            return ConnectorHealth(ok=False, message=str(exc)), ""
+        if not _TOPIC_NAME.fullmatch(topic):
+            return ConnectorHealth(ok=False, message=TOPIC_NAME_TEXT), "verbatim"
         try:
-            response = await self._request("GET", server_url + "/v1/health", headers=await self._auth_header())
+            headers = await self._auth_header()
+            response = await self._request("GET", server_url + "/v1/health", headers=headers)
+            problem = status_error(response.status_code)
+            if problem:
+                return ConnectorHealth(ok=False, message=problem), ""
+            # `/v1/health` antwortet auch ohne Recht am Thema; erst diese Frage zeigt, ob ntfy das Thema kennt.
+            response = await self._request("GET", f"{server_url}/{topic}/auth", headers=headers)
+            if response.status_code in (401, 403):
+                return await self._after_refusal(server_url, headers)
         except Exception as exc:  # noqa: BLE001 - Health-Check darf nie werfen, nur melden
-            return ConnectorHealth(ok=False, message=str(exc))
+            return ConnectorHealth(ok=False, message=str(exc)), ""
+        problem = topic_error(response.status_code)
+        if problem:
+            return ConnectorHealth(ok=False, message=problem), "verbatim"
         problem = status_error(response.status_code)
         if problem:
-            return ConnectorHealth(ok=False, message=problem)
-        return ConnectorHealth(ok=True, message=f"HTTP {response.status_code}")
+            return ConnectorHealth(ok=False, message=problem), ""
+        return ConnectorHealth(ok=True, message=f"HTTP {response.status_code}"), ""
+
+    async def _after_refusal(self, server_url: str, headers: dict[str, str]) -> tuple[ConnectorHealth, str]:
+        """Das Thema verweigert das Lesen: Ein falsches Token zeigt das Konto, ein reines Schreibrecht ist normal."""
+        if "Authorization" in headers:
+            account = await self._request("GET", server_url + "/v1/account", headers=headers)
+            if account.status_code == 401:
+                return ConnectorHealth(ok=False, message=TOKEN_REJECTED_TEXT), "verbatim"
+        return ConnectorHealth(ok=True, message=WRITE_ONLY_NOTE), "note"
 
 
 class _TokenIn(BaseModel):
@@ -563,7 +618,9 @@ class Extension(NodvardExtension):
         settings = await ctx.settings.get()
         extras = channel_entries(settings)
         if not extras:
-            result = await channel.test()
+            result, kind = await channel.check()
+            if kind:
+                return HealthReport(healthy=result.ok, message=result.message, details={"ntfy": _entry(result, kind)})
             return HealthReport(healthy=result.ok, message=result.message)
         checks: list[Awaitable[tuple[str, dict[str, Any]]]] = []
         if ntfy_configured(settings):
@@ -577,13 +634,20 @@ class Extension(NodvardExtension):
         return HealthReport(healthy=healthy, message="; ".join(summaries), details=details)
 
 
+def _entry(result: ConnectorHealth, kind: str) -> dict[str, Any]:
+    """Eintrag für `HealthReport.details`; der Kern zeigt `verbatim` und `note` unverändert."""
+    if result.ok:
+        return {"healthy": True, "note": result.message} if kind == "note" else {"healthy": True}
+    return {"healthy": False, "error": result.message, **({"verbatim": True} if kind == "verbatim" else {})}
+
+
 async def _check_ntfy(channel: _NtfyChannel) -> tuple[str, dict[str, Any]]:
     try:
         async with asyncio.timeout(CHANNEL_TIMEOUT_S):
-            result = await channel.test()
+            result, kind = await channel.check()
     except TimeoutError:
         return "ntfy", {"healthy": False, "error": "Der ntfy-Server antwortet nicht (Zeitüberschreitung)."}
-    return "ntfy", ({"healthy": True} if result.ok else {"healthy": False, "error": result.message})
+    return "ntfy", _entry(result, kind)
 
 
 async def _check_extra(ctx: ExtensionContext, channel: _NtfyChannel, name: str) -> tuple[str, dict[str, Any]]:

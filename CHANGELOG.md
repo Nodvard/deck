@@ -10,14 +10,82 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.14.1] – 2026-11-15
+
+Bugfix release for 0.14: CVE matching, Shield with root login, pending updates on German systems, Docker 29 images,
+unhealthy containers and hanging network drives.
+
+### Fixed
+
+- CVE matching on Debian and Proxmox servers no longer aborts and only reports vulnerabilities with an available update.
+- Server status and live view stay reachable when a network drive hangs; disk commands stop after five seconds.
+- Pending updates are counted again on servers with a German system language.
+- Docker 29 shows orphaned images again; unhealthy containers are yellow; a clear message when Docker Compose is missing.
+- Proxmox disks whose health cannot be read show as unknown instead of failed.
+- Shield weekly report shows expiring certificates; Shield SSH hardening and Fail2ban work with root login.
+- Gameserver, ntfy, Uptime Kuma and Vaultwarden report correctly; warnings keep running for other servers.
+- Storage sizes show whole values ("608 GB" instead of "608.0 GB").
+
 ### Security
 
+- Stricter input checks at login and logout; overly complex logo files are rejected.
+- SSH hardening no longer shows raw server output; the HTTPS requirement can be turned off with `NODVARD_DECK_HSTS=false`.
+
+## [0.14.0] – 2026-11-13
+
+Nodvard Shield grows into a security centre, SSH hardening at the press of a button, more of the interface as cards on
+the phone and a large round of hardening and fixes.
+
+### Upgrade notes
+
+- Run the server setup command once more on every server. Fail2ban settings, CVE matching, the weekly report and SSH
+  hardening need the new Shield helper script and the sudo rule from 0.13.
+- With the update helper: renew the helper image and store this installation's public key in it. Deck sends updates and
+  rollbacks only in signed form and the helper executes only signed requests; until then the buttons "Jetzt
+  aktualisieren" (update now) and "Zurück zu Version …" (back to version …) stay locked. Updating by hand keeps
+  working. Steps: `deploy/README.md`, section "Schlüssel für Update-Anforderungen". Without the helper nothing changes.
+
+### Added
+
+- Shield: Fail2ban settings per server (ban time, find time, attempts, exceptions, jails), CVE matching of installed
+  packages against public security advisories, weekly security reports with twelve weeks of history.
+- Shield: SSH hardening per server (key-only login, root password login off) with an automatic 60-second rollback and a
+  warning if Deck would lock itself out.
+- Shield: a read-only check of reachable TCP ports and HTTPS certificates, run from Deck inside the home network, not
+  from the internet. It warns about newly open ports, expiring or self-signed certificates and weak TLS protocols.
+- Nodvard KI can use OpenAI-compatible providers besides Ollama, with a fallback model and a connection test.
+- Voluntary usage data in three levels, off by default, with a log of what was sent and a delete button.
+- Docker: the images tab shows the total size and removes unused images without a name after approval.
+
+### Security
+
+- Deck signs every request to the update helper with a key per installation; the helper also requires the release
+  approval and rejects missing, forged, repeated and expired signatures.
 - The release signing tool rejects redirects from ghcr.io so registry credentials cannot reach another destination.
 - Image builds run the Debian upgrade again when `APT_REFRESH` changes, so each release picks up current Debian security updates.
+- Component list (SBOM) and provenance for every version.
+- Compose changes to a service that already has docker.sock or privileged rights stay a high-level approval; the
+  Compose templates run without root and with a read-only root file system; stacks from Git read their environment
+  files in a separate process with fixed limits.
+- Login: after 30 wrong passwords in five minutes, further attempts are blocked only from foreign networks, so nobody
+  can lock you out of your home network from the internet. The API rejects unknown fields and wrong JSON types.
+- SSH access only with an unambiguous target; a pause after three rejected SSH logins (30 minutes to 6 hours).
 
 ### Fixed
 
 - Nodvard Dock answers HEAD on released GET routes, including `/api/v1/health`.
+- Backups: without backups the overview shows a grey notice instead of a green success.
+- Docker: results and rollbacks survive aborts and restarts; the deletion protection for stack folders also applies
+  across links.
+- Files: incomplete partial downloads are detected as errors.
+- Virus scans, background checks and resumed tasks run with matching access contexts instead of being skipped silently.
+
+### Changed
+
+- Phone layout: overview, Proxmox, Synology, backups, registries, Shield packages, inventory and documents show cards;
+  stack cards show the most important buttons and a more menu.
+- Docker: missing stack values can be entered directly; stopping a stack offers to keep the containers.
+- Update centre: the search is at the top, the guide for updating by hand opens on demand.
 
 ## [0.13.0] – 2026-11-05
 

@@ -867,3 +867,110 @@ async def test_fail2ban_unknown_host_does_not_run_ssh(fail2ban_soc):
                      await soc.client.post("/defender/hosts/missing/fail2ban", json=_fail2ban_body())):
         assert response.status_code == 404
     assert not soc.ctx.proposals and not soc.ctx.commands and soc.ctx.config_reads == 0
+
+
+@pytest.fixture
+def no_helper(fail2ban_soc, monkeypatch):
+    """Der Server hat kein Hilfsskript, bis der Ablegebefehl gelaufen ist. `audits` sammelt die Audit-Einträge."""
+    from nodvard_deck_ext_shield import fail2ban as f2b
+    from test_ext_shield_fail2ban_config import READ
+
+    soc = fail2ban_soc
+    soc.ctx.audits = []
+    installed = []
+
+    async def run(host, command, timeout_s=60):
+        if command == ix.DECK_ADDRESS_COMMAND:
+            return SimpleNamespace(exit_code=0, stdout=f"{soc.ctx.deck_address}\n", stderr="", duration_ms=1)
+        soc.ctx.commands.append(command)
+        if command == av.helper_install_command():
+            installed.append(True)
+            return SimpleNamespace(exit_code=0, stdout=av.HELPER_INSTALLED + "\n", stderr="", duration_ms=1)
+        if command == f2b.read_command() and not installed:
+            return SimpleNamespace(exit_code=126, stdout="@@noroot\n@@noroot-helper-missing\n", stderr="", duration_ms=1)
+        if command in (f2b.read_command(), av.helper_inline_command(f2b.READ_ARGS)):
+            return SimpleNamespace(exit_code=0, stdout=READ, stderr="", duration_ms=1)
+        return SimpleNamespace(exit_code=0, stdout="ok\n", stderr="", duration_ms=1)
+
+    async def log(**entry):
+        soc.ctx.audits.append(entry)
+
+    monkeypatch.setattr(soc.ctx.exec, "run", run)
+    monkeypatch.setattr(soc.ctx.audit, "log", log)
+    soc.f2b = f2b
+    return soc
+
+
+def _as_root(soc):
+    soc.ctx._host = soc.ctx._host.model_copy(update={"credential_username": "root"})
+
+
+@pytest.mark.asyncio
+async def test_fail2ban_read_and_proposal_as_root_install_nothing(no_helper):
+    soc = no_helper
+    _as_root(soc)
+    response = await soc.client.get("/defender/hosts/h1/fail2ban")
+    assert response.status_code == 200 and response.json()["bantime"] == 600
+    req = await _click(soc, "/defender/hosts/h1/fail2ban", _fail2ban_body())
+    assert req.reason == f"Fail2ban-Einstellungen auf Raspberry Pi ändern. {av.HELPER_INSTALL_NOTE}"
+    assert soc.ctx.commands == [soc.f2b.read_command(), av.helper_inline_command(soc.f2b.READ_ARGS)] * 2
+
+
+@pytest.mark.asyncio
+async def test_fail2ban_change_as_root_installs_the_helper_and_logs_it(no_helper):
+    soc = no_helper
+    _as_root(soc)
+    req = await _click(soc, "/defender/hosts/h1/fail2ban", _fail2ban_body())
+    soc.ctx.commands.clear()
+    assert (await soc.executor.execute(req)).success
+    assert soc.ctx.commands == [soc.f2b.read_command(), av.helper_install_command(), soc.f2b.read_command(),
+                                req.payload["command"]]
+    assert [entry["outcome"] for entry in soc.ctx.audits] == ["success"]
+    assert soc.ctx.audits[0]["detail"]["helper_installed"] is True and soc.ctx.audits[0]["detail"]["bantime"] == 3600
+
+
+@pytest.mark.asyncio
+async def test_fail2ban_logs_the_installed_helper_even_when_the_change_is_refused(no_helper):
+    soc = no_helper
+    _as_root(soc)
+    req = await _click(soc, "/defender/hosts/h1/fail2ban", _fail2ban_body())
+    soc.ctx.commands.clear()
+    soc.ctx.config_reads = 0
+    req.payload["available_jails"] = ["sshd"]
+    req.payload["jails"] = ["sshd"]
+    req.payload["command"] = soc.f2b.command(req.payload)
+    result = await soc.executor.execute(req)
+    assert not result.success and "neu vorschlagen" in result.error
+    assert soc.ctx.commands == [soc.f2b.read_command(), av.helper_install_command(), soc.f2b.read_command()]
+    assert [(entry["outcome"], entry["detail"]) for entry in soc.ctx.audits] == [("failure", {"helper_installed": True})]
+
+
+@pytest.mark.asyncio
+async def test_fail2ban_as_other_user_names_no_helper_and_never_installs(no_helper):
+    soc = no_helper
+    response = await soc.client.get("/defender/hosts/h1/fail2ban")
+    assert response.status_code == 409 and response.json()["detail"] == av.HELPER_MISSING_MESSAGE
+    assert soc.ctx.commands == [soc.f2b.read_command()]
+    _as_root(soc)
+    req = await _click(soc, "/defender/hosts/h1/fail2ban", _fail2ban_body())
+    soc.ctx._host = soc.ctx._host.model_copy(update={"credential_username": "deck"})
+    soc.ctx.commands.clear()
+    result = await soc.executor.execute(req)
+    assert not result.success and result.error == av.HELPER_MISSING_MESSAGE
+    assert soc.ctx.commands == [soc.f2b.read_command()] and soc.ctx.audits == []
+
+
+@pytest.mark.asyncio
+async def test_fail2ban_audit_and_reason_stay_as_before_without_root_or_missing_helper(fail2ban_soc, monkeypatch):
+    soc = fail2ban_soc
+    audits = []
+
+    async def log(**entry):
+        audits.append(entry)
+
+    monkeypatch.setattr(soc.ctx.audit, "log", log)
+    req = await _click(soc, "/defender/hosts/h1/fail2ban", _fail2ban_body())
+    assert req.reason == "Fail2ban-Einstellungen auf Raspberry Pi ändern"
+    _as_root(soc)
+    assert (await soc.executor.execute(req)).success
+    assert "helper_installed" not in audits[0]["detail"]

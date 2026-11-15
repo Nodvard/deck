@@ -194,4 +194,4 @@ class VolumeBackup:
 
 
 def _gb(size: int) -> str:
-    return f"{size / 1024 ** 3:.1f} GB".replace(".", ",")
+    return f"{size / 1024 ** 3:.1f} GB".replace(".", ",").replace(",0 GB", " GB")

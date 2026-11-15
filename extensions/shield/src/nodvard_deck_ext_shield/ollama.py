@@ -215,7 +215,9 @@ async def list_models(ctx: "ExtensionContext", which: str = "primary") -> dict[s
         if not name:
             continue
         size = model.get("size")
-        label = f"{name} ({size / 1e9:.1f} GB)" if isinstance(size, (int, float)) and size > 0 else name
+        label = name
+        if isinstance(size, (int, float)) and size > 0:
+            label = f"{name} ({f'{size / 1e9:.1f}'.removesuffix('.0')} GB)"
         options.append({"value": name, "label": label})
     options.sort(key=lambda o: o["value"])
     if not options:

@@ -177,7 +177,7 @@ describe("Filter nach Server, Stack und Zustand", () => {
       h2: { virtualization: "none", cpus: 4, mem_total: null, docker_version: null },
     });
     render(<ContainersPage />);
-    expect((await screen.findByTestId("environment-h1")).textContent).toBe("im LXC-Container, Grenze 2 CPU · 4.0 GB RAM");
+    expect((await screen.findByTestId("environment-h1")).textContent).toBe("im LXC-Container, Grenze 2 CPU · 4 GB RAM");
     expect(screen.getByTestId("environment-h1").title).toContain("nicht für den ganzen Rechner darunter");
     expect(screen.getByTestId("environment-h2").textContent).toBe("4 CPU");
   });
@@ -229,7 +229,7 @@ describe("inStateFilter und environmentText", () => {
   });
 
   it("VM und Container", () => {
-    expect(environmentText({ virtualization: "vm", cpus: 4, mem_total: 8 * 1024 ** 3, docker_version: null }).text).toBe("VM mit 4 CPU · 8.0 GB RAM");
+    expect(environmentText({ virtualization: "vm", cpus: 4, mem_total: 8 * 1024 ** 3, docker_version: null }).text).toBe("VM mit 4 CPU · 8 GB RAM");
     expect(environmentText({ virtualization: "container", cpus: 1, mem_total: null, docker_version: null }).text).toBe("im Container, 1 CPU");
   });
 });

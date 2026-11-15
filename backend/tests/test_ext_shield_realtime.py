@@ -64,7 +64,7 @@ def test_a_container_is_refused():
 def test_too_little_memory_names_the_amount():
     r = rt.parse_readiness(_out(total_kb=GB_KB))
     assert not r.possible
-    assert r.reasons == ["Zu wenig Arbeitsspeicher: 1,0 GB insgesamt, nötig sind mindestens 2 GB."]
+    assert r.reasons == ["Zu wenig Arbeitsspeicher: 1 GB insgesamt, nötig sind mindestens 2 GB."]
 
 
 def test_the_memory_limits_are_inclusive():
@@ -77,7 +77,7 @@ def test_the_memory_limits_are_inclusive():
 def test_little_free_memory_only_counts_while_clamd_is_not_running():
     off = rt.parse_readiness(_out(avail_kb=GB_KB, state="inactive"))
     assert not off.possible
-    assert off.reasons == ["Zu wenig freier Arbeitsspeicher: 1,0 GB frei, clamd braucht etwa 1,2 GB."]
+    assert off.reasons == ["Zu wenig freier Arbeitsspeicher: 1 GB frei, clamd braucht etwa 1,2 GB."]
     assert rt.parse_readiness(_out(avail_kb=GB_KB, state="active")).possible
     # Ein unbekannter Zustand (kein systemd) zählt nicht als "läuft".
     assert not rt.parse_readiness(_out(avail_kb=GB_KB, state="")).possible

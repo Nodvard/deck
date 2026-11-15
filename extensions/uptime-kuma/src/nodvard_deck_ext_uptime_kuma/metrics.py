@@ -9,6 +9,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 _NAME = re.compile(r"[A-Za-z_:][A-Za-z0-9_:]*")
 _LABEL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_COMMENT = re.compile(r"^[ \t]*#[ \t]*(?:HELP|TYPE)[ \t]", re.MULTILINE)
 _ESCAPES = {"n": "\n", "\\": "\\", '"': '"'}
 
 # Je Monitor vier Reihen mit denselben Labels, z. B. `monitor_status{monitor_name="Router",monitor_type="ping"} 1`.
@@ -103,7 +104,7 @@ def parse_line(line: str) -> Sample | None:
 
 
 def parse_prometheus(text: str, *, wanted: frozenset[str] = WANTED) -> tuple[list[Sample], int]:
-    """Die Reihen mit gesuchtem Namen und die Zahl ALLER gelesenen Reihen (0: vermutlich keine Messwert-Seite)."""
+    """Die Reihen mit gesuchtem Namen und die Zahl ALLER gelesenen Reihen (0: keine Messwert-Seite)."""
     kept: list[Sample] = []
     total = 0
     for line in text.splitlines():
@@ -113,6 +114,9 @@ def parse_prometheus(text: str, *, wanted: frozenset[str] = WANTED) -> tuple[lis
         total += 1
         if sample.name in wanted:
             kept.append(sample)
+    if not kept and not _COMMENT.search(text):
+        # Auch in HTML stehen Zeilen, die sich als Reihe lesen lassen, etwa `margin: 0 auto;`.
+        return [], 0
     return kept, total
 
 

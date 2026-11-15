@@ -1,0 +1,306 @@
+{
+ "pam": {
+  "CVE-2024-22365": {
+   "debianbug": 1061097,
+   "description": "linux-pam (aka Linux PAM) before 1.6.0 allows attackers to cause a denial of service (blocked login process) via mkfifo because the openat call (for protect_dir) lacks O_DIRECTORY.",
+   "releases": {
+    "bookworm": {
+     "fixed_version": "1.5.2-6+deb12u2",
+     "repositories": {
+      "bookworm": "1.5.2-6+deb12u2"
+     },
+     "status": "resolved",
+     "urgency": "not yet assigned"
+    },
+    "forky": {
+     "fixed_version": "1.5.3-4",
+     "repositories": {
+      "forky": "1.7.0-8"
+     },
+     "status": "resolved",
+     "urgency": "not yet assigned"
+    },
+    "sid": {
+     "fixed_version": "1.5.3-4",
+     "repositories": {
+      "sid": "1.7.0-8"
+     },
+     "status": "resolved",
+     "urgency": "not yet assigned"
+    },
+    "trixie": {
+     "fixed_version": "1.5.3-4",
+     "repositories": {
+      "trixie": "1.7.0-5"
+     },
+     "status": "resolved",
+     "urgency": "not yet assigned"
+    }
+   },
+   "scope": "local"
+  },
+  "CVE-2025-6018": {
+   "description": "A Local Privilege Escalation (LPE) vulnerability has been discovered in pam-config within Linux Pluggable Authentication Modules (PAM). This flaw allows an unprivileged local attacker (for example, a user logged in via SSH) to obtain the elevated privileges normally reserved for a physically present, \"allow_active\" user. The highest risk is that the attacker can then perform all allow_active yes Polkit actions, which are typically restricted to console users, potentially gaining unauthorized control over system configurations, services, or other sensitive operations.",
+   "releases": {
+    "bookworm": {
+     "fixed_version": "0",
+     "repositories": {
+      "bookworm": "1.5.2-6+deb12u2"
+     },
+     "status": "resolved",
+     "urgency": "unimportant"
+    },
+    "forky": {
+     "fixed_version": "0",
+     "repositories": {
+      "forky": "1.7.0-8"
+     },
+     "status": "resolved",
+     "urgency": "unimportant"
+    },
+    "sid": {
+     "fixed_version": "0",
+     "repositories": {
+      "sid": "1.7.0-8"
+     },
+     "status": "resolved",
+     "urgency": "unimportant"
+    },
+    "trixie": {
+     "fixed_version": "0",
+     "repositories": {
+      "trixie": "1.7.0-5"
+     },
+     "status": "resolved",
+     "urgency": "unimportant"
+    }
+   },
+   "scope": "local"
+  },
+  "CVE-2025-8941": {
+   "description": "A flaw was found in linux-pam. The pam_namespace module may improperly handle user-controlled paths, allowing local users to exploit symlink attacks and race conditions to elevate their privileges to root. This CVE provides a \"complete\" fix for CVE-2025-6020.",
+   "releases": {
+    "bookworm": {
+     "repositories": {
+      "bookworm": "1.5.2-6+deb12u2"
+     },
+     "status": "undetermined",
+     "urgency": "not yet assigned"
+    },
+    "forky": {
+     "repositories": {
+      "forky": "1.7.0-8"
+     },
+     "status": "undetermined",
+     "urgency": "not yet assigned"
+    },
+    "sid": {
+     "repositories": {
+      "sid": "1.7.0-8"
+     },
+     "status": "undetermined",
+     "urgency": "not yet assigned"
+    },
+    "trixie": {
+     "repositories": {
+      "trixie": "1.7.0-5"
+     },
+     "status": "undetermined",
+     "urgency": "not yet assigned"
+    }
+   },
+   "scope": "local"
+  },
+  "CVE-2026-54411": {
+   "debianbug": 1140190,
+   "description": "Linux-PAM through 1.7.2 contains an observable timing discrepancy (CWE-208) in the pam_userdb module's plaintext-password comparison path in modules/pam_userdb/pam_userdb.c that allows a local or network-adjacent attacker able to repeatedly drive authentication through a calling service to recover the plaintext password of a target account by measuring response-timing differences.",
+   "releases": {
+    "bookworm": {
+     "nodsa": "Minor issue",
+     "nodsa_reason": "postponed",
+     "repositories": {
+      "bookworm": "1.5.2-6+deb12u2"
+     },
+     "status": "open",
+     "urgency": "not yet assigned"
+    },
+    "forky": {
+     "repositories": {
+      "forky": "1.7.0-8"
+     },
+     "status": "open",
+     "urgency": "not yet assigned"
+    },
+    "sid": {
+     "repositories": {
+      "sid": "1.7.0-8"
+     },
+     "status": "open",
+     "urgency": "not yet assigned"
+    },
+    "trixie": {
+     "nodsa": "Minor issue",
+     "nodsa_reason": "",
+     "repositories": {
+      "trixie": "1.7.0-5"
+     },
+     "status": "open",
+     "urgency": "not yet assigned"
+    }
+   },
+   "scope": "local"
+  }
+ },
+ "rtmpdump": {
+  "CVE-2026-112060": {
+   "description": "librtmp in RTMPDump through 2.6 contains an out-of-bounds read and heap out-of-bounds write vulnerability because AMF3_Decode ignores AMF3 property decode failures. Malicious RTMP servers or man-in-the-middle attackers can send oversized AMF3 string lengths, and with the token option DecodeTEA corrupts heap memory and leaks heap bytes.",
+   "releases": {
+    "bookworm": {
+     "repositories": {
+      "bookworm": "2.4+20151223.gitfa8646d.1-2"
+     },
+     "status": "undetermined",
+     "urgency": "not yet assigned"
+    },
+    "forky": {
+     "repositories": {
+      "forky": "2.6-1"
+     },
+     "status": "undetermined",
+     "urgency": "not yet assigned"
+    },
+    "sid": {
+     "repositories": {
+      "sid": "2.6-1"
+     },
+     "status": "undetermined",
+     "urgency": "not yet assigned"
+    },
+    "trixie": {
+     "repositories": {
+      "trixie": "2.4+20151223.gitfa8646d.1-2"
+     },
+     "status": "undetermined",
+     "urgency": "not yet assigned"
+    }
+   },
+   "scope": "local"
+  }
+ },
+ "sqlite3": {
+  "CVE-2021-45346": {
+   "debianbug": 1005974,
+   "description": "A Memory Leak vulnerability exists in SQLite Project SQLite3 3.35.1 and 3.37.0 via maliciously crafted SQL Queries (made via editing the Database File), it is possible to query a record, and leak subsequent bytes of memory that extend beyond the record, which could let a malicious user obtain sensitive information. NOTE: The developer disputes this as a vulnerability stating that If you give SQLite a corrupted database file and submit a query against the database, it might read parts of the database that you did not intend or expect.",
+   "releases": {
+    "bookworm": {
+     "repositories": {
+      "bookworm": "3.40.1-2+deb12u2"
+     },
+     "status": "open",
+     "urgency": "unimportant"
+    },
+    "forky": {
+     "repositories": {
+      "forky": "3.54.1-2"
+     },
+     "status": "open",
+     "urgency": "unimportant"
+    },
+    "sid": {
+     "repositories": {
+      "sid": "3.54.1-2"
+     },
+     "status": "open",
+     "urgency": "unimportant"
+    },
+    "trixie": {
+     "repositories": {
+      "trixie": "3.46.1-7+deb13u2"
+     },
+     "status": "open",
+     "urgency": "unimportant"
+    }
+   },
+   "scope": "local"
+  },
+  "CVE-2025-6965": {
+   "debianbug": 1109379,
+   "description": "There exists a vulnerability in SQLite versions before 3.50.2 where the number of aggregate terms could exceed the number of columns available. This could lead to a memory corruption issue. We recommend upgrading to version 3.50.2 or above.",
+   "releases": {
+    "bookworm": {
+     "fixed_version": "3.40.1-2+deb12u2",
+     "repositories": {
+      "bookworm": "3.40.1-2+deb12u2"
+     },
+     "status": "resolved",
+     "urgency": "not yet assigned"
+    },
+    "forky": {
+     "fixed_version": "3.46.1-7",
+     "repositories": {
+      "forky": "3.54.1-2"
+     },
+     "status": "resolved",
+     "urgency": "not yet assigned"
+    },
+    "sid": {
+     "fixed_version": "3.46.1-7",
+     "repositories": {
+      "sid": "3.54.1-2"
+     },
+     "status": "resolved",
+     "urgency": "not yet assigned"
+    },
+    "trixie": {
+     "fixed_version": "3.46.1-7",
+     "repositories": {
+      "trixie": "3.46.1-7+deb13u2"
+     },
+     "status": "resolved",
+     "urgency": "not yet assigned"
+    }
+   },
+   "scope": "local"
+  },
+  "CVE-2025-7709": {
+   "debianbug": 1114609,
+   "description": "An integer overflow exists in the  FTS5 https://sqlite.org/fts5.html  extension. It occurs when the size of an array of tombstone pointers is calculated and truncated into a 32-bit integer. A pointer to partially controlled data can then be written out of bounds.",
+   "releases": {
+    "bookworm": {
+     "nodsa": "Minor issue",
+     "nodsa_reason": "",
+     "repositories": {
+      "bookworm": "3.40.1-2+deb12u2"
+     },
+     "status": "open",
+     "urgency": "not yet assigned"
+    },
+    "forky": {
+     "fixed_version": "3.46.1-8",
+     "repositories": {
+      "forky": "3.54.1-2"
+     },
+     "status": "resolved",
+     "urgency": "not yet assigned"
+    },
+    "sid": {
+     "fixed_version": "3.46.1-8",
+     "repositories": {
+      "sid": "3.54.1-2"
+     },
+     "status": "resolved",
+     "urgency": "not yet assigned"
+    },
+    "trixie": {
+     "fixed_version": "3.46.1-7+deb13u1",
+     "repositories": {
+      "trixie": "3.46.1-7+deb13u2"
+     },
+     "status": "resolved",
+     "urgency": "not yet assigned"
+    }
+   },
+   "scope": "local"
+  }
+ }
+}

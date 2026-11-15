@@ -106,7 +106,8 @@ class VaultwardenClient:
             "version": _text(_json(version), _VERSION_RE) if version.status_code == 200 else None,
             "api_version": _text(body.get("version"), _VERSION_RE),
             "server_name": _text(server.get("name"), _NAME_RE),
-            # Ältere Versionen sagen das nicht: dann unbekannt.
+            # Ältere Versionen sagen das nicht: dann unbekannt. `True` heißt nur „nicht als abgeschaltet gemeldet“:
+            # Mit `SIGNUPS_ALLOWED=false` bleibt es dabei, solange Einladungen ohne Mailversand erlaubt sind.
             "signups_open": (not closed) if isinstance(closed, bool) else None,
             "domain": _address(environment.get("vault")),
         }

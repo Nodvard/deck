@@ -32,4 +32,19 @@ describe("AppTile", () => {
     render(<AppTile service={service(null)} />);
     expect(screen.getByTestId("app-s1")).toHaveAttribute("title", "Keine Web-Oberfläche erkannt");
   });
+
+  it.each([
+    ["running", "good", "online"],
+    ["running", null, "online"],
+    ["running", "warn", "unknown"],
+    ["running", "danger", "problem"],
+    ["restarting", "warn", "unknown"],
+    ["exited", "neutral", "stopped"],
+    ["exited", null, "stopped"],
+    [null, null, "stopped"],
+  ])("Statuspunkt für Zustand %s mit Ton %s: %s", (state, tone, dot) => {
+    render(<AppTile service={{ ...service(null), state, tone }} />);
+    const point = screen.getByTestId("app-s1").querySelector(".status-dot");
+    expect(point?.className).toBe(`status-dot ${dot}`);
+  });
 });

@@ -78,17 +78,24 @@ class GameServerStatus:
             data = {"profile": profile.id, "running": False, "service_state": "stopped", "error": "Server ist ausgeschaltet."}
             self._cache[host.id] = (time.monotonic(), data)
             return data
+        answered = False
         try:
             with self._ctx.exec.read_access(host, timeout_s=45):
                 result = await self._ctx.exec.run(host, profile.status_command(config), timeout_s=45)
-            if result.exit_code != 0:
+            answered = True
+            reason = profile.explain_failure(result.exit_code) if result.exit_code != 0 else None
+            if reason:
+                data = {"profile": profile.id, "running": False, "service_state": "unknown", "error": reason}
+            elif result.exit_code != 0:
                 raise RuntimeError(result.stderr.strip() or f"Exit-Code {result.exit_code}")
-            data = profile.parse_status(result.stdout)
-            data["error"] = None
+            else:
+                data = profile.parse_status(result.stdout)
+                data["error"] = None
         except Exception as exc:  # noqa: BLE001 - ein nicht erreichbarer Server ist ein Zustand, kein Absturz
             data = {"profile": profile.id, "running": False, "service_state": "unknown", "error": error_message(exc)}
-        # Ausweg für Setups ohne passendes Profil: eigener Join-Code-Befehl (`log_command`, `join_code_pattern`).
-        if settings.get("log_command") and data.get("error") is None:
+        # Ausweg für Setups ohne passendes Profil: eigener Join-Code-Befehl (`log_command`, `join_code_pattern`). Er läuft
+        # deshalb auch, wenn der Profil-Status scheitert, nur nicht gegen einen Server, der gar nicht antwortet.
+        if settings.get("log_command") and answered:
             data["join_code"] = await _legacy_join_code(self._ctx, host, settings)
         self._cache[host.id] = (time.monotonic(), data)
         return data

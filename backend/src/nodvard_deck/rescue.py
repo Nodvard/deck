@@ -22,6 +22,7 @@ import socket
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -608,12 +609,109 @@ def _info_page(title: str, text: str) -> str:
     )
 
 
+_HSTS_HEADER = "Strict-Transport-Security"
+_HSTS_VARIABLES = ("NODVARD_DECK_HSTS", "LATTICE_HSTS")
+_TRUE_VALUES = frozenset({"1", "on", "t", "true", "y", "yes"})
+
+
+ENV_FILE = ".env"
+ENV_FILE_LIMIT = 1024 * 1024
+
+_ENV_BLANK = re.compile(r"\s*")
+_ENV_EXPORT = re.compile(r"export[^\S\n]+")
+_ENV_KEY = re.compile(r"'([^']+)'|([^=#\s]+)")
+_ENV_GAP = re.compile(r"[^\S\n]*")
+_ENV_EQUALS = re.compile(r"=[^\S\n]*")
+# Ein Backslash nimmt immer das nächste Zeichen mit, auch ein Anführungszeichen.
+_ENV_QUOTED = {"'": re.compile(r"'((?:\\.|[^'\\])*)'", re.DOTALL), '"': re.compile(r'"((?:\\.|[^"\\])*)"', re.DOTALL)}
+_ENV_REST = re.compile(r"[^\n]*")
+_ENV_COMMENT = re.compile(r"[^\S\n]*#[^\n]*")
+_ENV_LINE_END = re.compile(r"[^\S\n]*(?:\n|\Z)")
+_ENV_INLINE_COMMENT = re.compile(r"\s+#.*")
+
+
+def _env_file_values(text: str) -> dict[str, str | None]:
+    """Die Zuweisungen einer `.env`-Datei, Schlüssel klein geschrieben, gelesen wie von der Anwendung. Maskierungen und
+    `${NAME}` bleiben stehen: Ein solcher Wert ist ohnehin keiner, der den Schalter einschaltet."""
+    found: dict[str, str | None] = {}
+    pos = 0
+
+    def take(pattern: re.Pattern[str]) -> re.Match[str] | None:
+        nonlocal pos
+        match = pattern.match(text, pos)
+        if match:
+            pos = match.end()
+        return match
+
+    while True:
+        take(_ENV_BLANK)
+        if pos >= len(text):
+            break
+        take(_ENV_EXPORT)
+        key = take(_ENV_KEY)
+        value: str | None = None
+        complete = key is not None
+        if complete:
+            take(_ENV_GAP)
+            if take(_ENV_EQUALS):
+                # Ein Wert in Anführungszeichen darf über mehrere Zeilen gehen; fehlt das schließende, gilt die Zeile nicht.
+                quoted = _ENV_QUOTED.get(text[pos : pos + 1])
+                if quoted is None:
+                    value = _ENV_INLINE_COMMENT.sub("", _ENV_REST.match(text, pos).group()).rstrip()
+                    take(_ENV_REST)
+                else:
+                    match = take(quoted)
+                    complete = match is not None
+                    value = match.group(1) if match else None
+        if complete:
+            take(_ENV_COMMENT)
+            complete = take(_ENV_LINE_END) is not None
+        if not complete:
+            take(_ENV_REST)
+            continue
+        found[key.group(1) or key.group(2)] = value
+    return {name.lower(): value for name, value in found.items()}
+
+
+def _env_file_text(path: Path) -> str | None:
+    """Inhalt der Datei, `""` ohne Datei, `None`, wenn sie sich nicht lesen lässt."""
+    if not path.is_file():
+        return ""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(ENV_FILE_LIMIT + 1)
+        if len(raw) > ENV_FILE_LIMIT:
+            return None
+        return raw.decode("utf-8").removeprefix("\ufeff").replace("\r", "\n")
+    except (OSError, ValueError):
+        return None
+
+
+def hsts_enabled(environ: Mapping[str, str] | None = None, env_file: Path | None = None) -> bool:
+    """Der Schalter `NODVARD_DECK_HSTS` (alt `LATTICE_HSTS`), gelesen wie in den Einstellungen der Anwendung: erst die
+    Umgebung, dann die `.env` im Arbeitsordner. Ein Wert, den die Anwendung nicht als wahr liest, schaltet ab, eine
+    unlesbare Datei ebenso: Damit startet sie nicht, und gemeint war eher „aus“."""
+    values = {name.upper(): value for name, value in (os.environ if environ is None else environ).items()}
+    for name in _HSTS_VARIABLES:
+        if name in values:
+            return values[name].lower() in _TRUE_VALUES
+    text = _env_file_text(Path(ENV_FILE) if env_file is None else env_file)
+    if text is None:
+        return False
+    in_file = _env_file_values(text)
+    for name in _HSTS_VARIABLES:
+        value = in_file.get(name.lower())
+        if value is not None:
+            return value.lower() in _TRUE_VALUES
+    return True
+
+
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     # HTTPS endet am Proxy; über HTTP ignoriert der Browser HSTS.
-    "Strict-Transport-Security": "max-age=31536000",
+    _HSTS_HEADER: "max-age=31536000",
     # Mit `no-referrer` schicken Browser bei eigenen Formularen `Origin: null`.
     "Referrer-Policy": "same-origin",
     "Cross-Origin-Opener-Policy": "same-origin",
@@ -735,8 +833,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        hsts = hsts_enabled()
         for name, value in _SECURITY_HEADERS.items():
-            self.send_header(name, value)
+            if hsts or name != _HSTS_HEADER:
+                self.send_header(name, value)
         for name, value in (extra or {}).items():
             self.send_header(name, value)
         self.end_headers()

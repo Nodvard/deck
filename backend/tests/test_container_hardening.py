@@ -186,8 +186,8 @@ def test_container_hardening_has_a_security_entry():
 
 
 @pytest.mark.parametrize(("filename", "note"), [
-    ("docs/11-ERST-EINRICHTUNG.md", "Die Notseite sendet HSTS immer; Browser beachten es nur über HTTPS."),
-    ("docs/en/FIRST-SETUP.md", "The rescue page always sends HSTS; browsers only apply it over HTTPS."),
+    ("docs/11-ERST-EINRICHTUNG.md", "Die Notseite sendet HSTS immer, außer mit `NODVARD_DECK_HSTS=false`; Browser beachten es nur über HTTPS."),
+    ("docs/en/FIRST-SETUP.md", "The rescue page always sends HSTS unless `NODVARD_DECK_HSTS=false` is set; browsers only apply it over HTTPS."),
 ])
 def test_setup_docs_explain_hsts_on_the_rescue_page(filename, note):
     assert note in (ROOT / filename).read_text(encoding="utf-8")

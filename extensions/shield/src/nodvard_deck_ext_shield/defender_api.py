@@ -300,21 +300,28 @@ class DefenderExecutor:
         if req.payload.get("command") != command:
             return ActionResult(success=False, error=STALE_MESSAGE)
         if req.action_type == ACTION_FAIL2BAN_CONFIG:
+            use = av.HelperUse(root=getattr(host, "credential_username", None) == "root", install=True)
+
+            async def audit(ok: bool, detail: dict) -> None:
+                await self._ctx.audit.log(
+                    action=f"{EXT_ID}.fail2ban_config", outcome="success" if ok else "failure",
+                    actor=req.proposed_by, target_type="host", target_id=host.id, reason=req.reason,
+                    detail={**detail, **({"helper_installed": True} if use.installed else {})},
+                )
+
             try:
-                current = await f2b.read(self._ctx, host)
+                current = await f2b.read(self._ctx, host, use)
                 wanted = f2b.settings(req.payload, strict=True)
                 if current["deck_address"] != wanted["deck_address"] or current["available_jails"] != wanted["available_jails"]:
-                    return ActionResult(success=False, error="SSH-Quelladresse oder erkannte Jails haben sich geändert. Bitte neu vorschlagen.")
+                    raise ValueError("SSH-Quelladresse oder erkannte Jails haben sich geändert. Bitte neu vorschlagen.")
             except ValueError as exc:
+                if use.installed:
+                    await audit(False, {})
                 return ActionResult(success=False, error=str(exc))
             result = await self._ctx.exec.run(host, command, timeout_s=120)
             output = av.helper_text((result.stdout or "") + (result.stderr or ""))
             ok = result.exit_code == 0
-            await self._ctx.audit.log(
-                action=f"{EXT_ID}.fail2ban_config", outcome="success" if ok else "failure",
-                actor=req.proposed_by, target_type="host", target_id=host.id,
-                reason=req.reason, detail={key: wanted[key] for key in f2b.FIELDS},
-            )
+            await audit(ok, {key: wanted[key] for key in f2b.FIELDS})
             return ActionResult(success=ok, exit_code=result.exit_code, output=output, duration_ms=result.duration_ms,
                                 error=None if ok else av.no_root_message(output) if av.NO_ROOT in output else output)
         if req.action_type in (ACTION_UPGRADE, ACTION_REBOOT):
@@ -909,8 +916,10 @@ def build_routers(
                                   strict=True)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        return await _propose(host, ACTION_FAIL2BAN_CONFIG, fields,
-                              f"Fail2ban-Einstellungen auf {host.display_name or host.name} ändern", actor, Risk.MEDIUM)
+        reason = f"Fail2ban-Einstellungen auf {host.display_name or host.name} ändern"
+        if getattr(host, "credential_username", None) == "root":
+            reason += ". " + av.HELPER_INSTALL_NOTE
+        return await _propose(host, ACTION_FAIL2BAN_CONFIG, fields, reason, actor, Risk.MEDIUM)
 
     @manage.post(
         "/hosts/{host_id}/ban",

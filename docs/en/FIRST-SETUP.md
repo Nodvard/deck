@@ -809,7 +809,7 @@ Deck needs no additional capabilities: Uvicorn listens on port 8080 (`deploy/Doc
 (`backend/src/nodvard_deck/core/ssh.py`), and OCR runs as a regular process. The frontend has no voice input;
 camera, microphone and location remain disabled in the browser. HSTS is sent only when HTTPS is detected.
 Forwarded headers count only from a configured trusted proxy. The warning about unencrypted access remains on HTTP.
-The rescue page always sends HSTS; browsers only apply it over HTTPS.
+The rescue page always sends HSTS unless `NODVARD_DECK_HSTS=false` is set; browsers only apply it over HTTPS.
 CORP `same-origin` applies to API responses. The exception is `/api/v1/health` with CORP `cross-origin`, so that start
 pages such as Homarr or Homepage can query Deck's status directly from the browser.
 Public logos, favicons and app icons receive CORP `cross-origin` for GET/HEAD and can be embedded on other websites.
@@ -1462,9 +1462,10 @@ change its schedule.
 Each report preserves the state of every server at that time: pending updates and security updates, the latest
 virus-scan result, the last stored Fail2ban bans, the latest successful Lynis hardening score, and new and resolved
 malware findings during the reporting period. Missing results appear as unknown. Shield only reads its stored
-data for this report and starts no scans or server queries. Certificate expiry dates are not yet stored in Shield;
-the report explicitly says "Keine gespeicherten Zertifikatsdaten" (no stored certificate data). This does not tell
-you whether any certificates are about to expire.
+data for this report and starts no scans or server queries. Certificates expiring within 30 days come from the
+server's latest external check (with its time; days remaining are counted from the report time). Without an external
+check the report says "Keine gespeicherten Zertifikatsdaten" (no stored certificate data), which does not tell you
+whether any certificates are about to expire.
 
 Your existing notification channels receive a short summary with a link to the full report. Later results do not
 change an old report. The history is empty until the first scheduled run; reports for earlier weeks are not created

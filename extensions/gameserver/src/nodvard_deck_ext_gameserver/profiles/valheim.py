@@ -183,6 +183,15 @@ class ValheimWindowsProfile:
             raise ValueError(f"Unbekannte Gameserver-Aktion: {action}")
         return encode_powershell(_prelude(config) + _ACTIONS[action])
 
+    def explain_failure(self, exit_code: int) -> str | None:
+        # 127 meldet eine POSIX-Shell, die `powershell` nicht kennt; unter Windows gibt es PowerShell immer.
+        if exit_code != 127:
+            return None
+        return (
+            f"Auf diesem Server gibt es kein PowerShell. Das Profil „{self.label}“ braucht einen Windows-Server, "
+            "ein Profil für Linux gibt es noch nicht."
+        )
+
     def parse_status(self, stdout: str) -> dict[str, Any]:
         start = stdout.find("{")
         raw: dict[str, Any] = json.loads(stdout[start:]) if start >= 0 else {}

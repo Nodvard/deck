@@ -113,9 +113,9 @@ def test_debian_source_release_and_backported_fix(cve):
         "CVE-2026-1004": {"releases": {"bookworm": {"status": "open", "urgency": "not yet assigned"}}},
     }}
     findings = cve.match_debian(cve.parse_inventory(APT), data)
-    assert [(row["cve"], row["severity"]) for row in findings] == [("CVE-2026-1001", "high"), ("CVE-2026-1004", "unknown")]
+    assert [(row["cve"], row["severity"]) for row in findings] == [("CVE-2026-1001", "high")]
     fixed = APT.replace("3.0.11-1~deb12u1", "3.0.11-1~deb12u2")
-    assert [row["cve"] for row in cve.match_debian(cve.parse_inventory(fixed), data)] == ["CVE-2026-1004"]
+    assert cve.match_debian(cve.parse_inventory(fixed), data) == []
 
 
 def archive(*records):
@@ -129,14 +129,108 @@ def archive(*records):
     return out.getvalue()
 
 
-@pytest.mark.parametrize("release", [
-    {"status": "undetermined"}, {"status": "resolved"},
-    {"status": "resolved", "fixed_version": "not-a-version"},
-])
-def test_debian_unknown_or_malformed_relevant_status_cannot_report_clean(cve, release):
-    data = {"example": {"CVE-2026-1001": {"releases": {"bookworm": release}}}}
+def test_debian_malformed_fixed_version_cannot_report_clean(cve):
+    data = {"example": {"CVE-2026-1001": {"releases": {"bookworm": {"status": "resolved", "fixed_version": "not-a-version"}}}}}
     with pytest.raises(cve.SourceError):
         cve.match_debian(inventory(cve), data)
+
+
+@pytest.mark.parametrize(("release", "expected"), [
+    ({"status": "undetermined"}, {"no_fix": 0, "unimportant": 0, "undetermined": 1, "foreign": 0}),
+    ({"status": "resolved"}, {"no_fix": 1, "unimportant": 0, "undetermined": 0, "foreign": 0}),
+    ({"status": "open", "urgency": "unimportant"}, {"no_fix": 1, "unimportant": 1, "undetermined": 0, "foreign": 0}),
+    ({"status": "open", "urgency": "not yet assigned"}, {"no_fix": 1, "unimportant": 0, "undetermined": 0, "foreign": 0}),
+])
+def test_debian_unclear_entry_is_counted_not_fatal(cve, release, expected):
+    data = {"example": {"CVE-2026-1001": {"releases": {"bookworm": release}},
+                        "CVE-2026-1002": {"releases": {"bookworm": {"status": "resolved", "fixed_version": "2.0-1", "urgency": "high"}}}}}
+    unrated: dict = {}
+    findings = cve.match_debian(inventory(cve), data, unrated)
+    assert [row["cve"] for row in findings] == ["CVE-2026-1002"]
+    assert unrated == expected
+
+
+def test_debian_clean_server_has_zero_counts(cve):
+    data = {"example": {"CVE-2026-1001": {"releases": {"bookworm": {"status": "resolved", "fixed_version": "0.5-1"}}}}}
+    unrated: dict = {}
+    assert cve.match_debian(inventory(cve), data, unrated) == []
+    assert unrated == {"no_fix": 0, "unimportant": 0, "undetermined": 0, "foreign": 0}
+
+
+def tracker_excerpt():
+    return json.loads((Path(__file__).parent / "fixtures" / "shield_cve" / "debian-tracker-ausschnitt-echt.json").read_text())
+
+
+def excerpt_inventory(cve, codename, pam, sqlite, release="12"):
+    return cve.Inventory("debian", release, codename, (
+        cve.Package("libpam0g", pam, "pam", pam, "amd64"), cve.Package("libpam-modules", pam, "pam", pam, "amd64"),
+        cve.Package("libsqlite3-0", sqlite, "sqlite3", sqlite, "amd64"),
+        cve.Package("librtmp1", "2.4+20151223.gitfa8646d.1-2", "rtmpdump", "2.4+20151223.gitfa8646d.1-2", "amd64"),
+    ))
+
+
+def test_real_tracker_excerpt_current_bookworm_has_no_findings(cve):
+    unrated: dict = {}
+    inv = excerpt_inventory(cve, "bookworm", "1.5.2-6+deb12u2", "3.40.1-2+deb12u2")
+    assert cve.match_debian(inv, tracker_excerpt(), unrated) == []
+    assert unrated == {"no_fix": 3, "unimportant": 1, "undetermined": 2, "foreign": 0}
+
+
+def test_real_tracker_excerpt_old_bookworm_packages_are_found(cve):
+    inv = excerpt_inventory(cve, "bookworm", "1.5.2-6+deb12u1", "3.40.1-2+deb12u1")
+    found = {(row["package"], row["cve"]) for row in cve.match_debian(inv, tracker_excerpt())}
+    assert found == {("libpam0g", "CVE-2024-22365"), ("libpam-modules", "CVE-2024-22365"), ("libsqlite3-0", "CVE-2025-6965")}
+
+
+def test_real_tracker_excerpt_trixie_sqlite_before_fix(cve):
+    inv = excerpt_inventory(cve, "trixie", "1.7.0-5", "3.46.1-7", release="13")
+    found = {(row["package"], row["cve"]) for row in cve.match_debian(inv, tracker_excerpt())}
+    assert found == {("libsqlite3-0", "CVE-2025-7709")}
+
+
+def test_packages_not_from_debian_count_only_open_undetermined_or_newer_fix(cve):
+    def entry(**release):
+        return {"releases": {"bookworm": release}}
+    data = {"zfs-linux": {
+        "CVE-2026-2001": entry(status="resolved", fixed_version="2.1.11-1+deb12u1", urgency="high"),
+        "CVE-2026-2002": entry(status="resolved", fixed_version="2.3.0-1", urgency="high"),
+        "CVE-2026-2003": entry(status="open", urgency="low"),
+        "CVE-2026-2004": entry(status="undetermined"),
+        "CVE-2026-2005": entry(status="resolved", fixed_version="0"),
+    }}
+    inv = cve.Inventory("debian", "12", "bookworm", (cve.Package("zfsutils-linux", "2.2.10-pve1", "zfs-linux", "2.2.10-pve1", "amd64"),))
+    unrated: dict = {}
+    assert cve.match_debian(inv, data, unrated) == []
+    assert unrated == {"no_fix": 0, "unimportant": 0, "undetermined": 0, "foreign": 3}
+
+
+@pytest.mark.parametrize(("name", "version", "foreign"), [
+    ("zfs-linux", "2.2.10-pve1", True), ("apparmor", "4.1.1-pmx1", True), ("grub2", "2.12-9+pmx2", True),
+    ("lvm2", "2.03.31-2+pmx1", True), ("shim", "16.1-2+pmx1", True),
+    ("openssl", "3.0.11-1~deb12u2", False), ("curl", "7.88.1-10+deb12u5+b1", False), ("pam", "1.5.2-6~bpo12+1", False),
+])
+def test_foreign_version_pattern(cve, name, version, foreign):
+    data = {name: {"CVE-2026-3001": {"releases": {"bookworm": {"status": "open", "urgency": "low"}}}}}
+    inv = cve.Inventory("debian", "12", "bookworm", (cve.Package(name, version, name, version, "amd64"),))
+    unrated: dict = {}
+    cve.match_debian(inv, data, unrated)
+    assert (unrated["foreign"], unrated["no_fix"]) == ((1, 0) if foreign else (0, 1))
+
+
+def test_proxmox_package_names_missing_from_the_feed_cause_nothing(cve):
+    inv = cve.Inventory("debian", "12", "bookworm", (cve.Package("pve-manager", "8.4.1", "pve-manager", "8.4.1", "all"),
+                                                      cve.Package("proxmox-ve", "8.4.0", "proxmox-ve", "8.4.0", "all")))
+    unrated: dict = {}
+    assert cve.match_debian(inv, tracker_excerpt(), unrated) == []
+    assert unrated == {"no_fix": 0, "unimportant": 0, "undetermined": 0, "foreign": 0}
+
+
+async def test_check_host_reports_ok_with_unrated_counts(cve, tmp_path):
+    feed = json.dumps({"openssl": {"CVE-2026-1001": {"releases": {"bookworm": {"status": "undetermined"}}}}}).encode()
+    ctx = context(tmp_path, feed)
+    result = await cve.check_host(ctx, "host-1")
+    assert result["status"] == "ok"
+    assert result["unrated"] == {"no_fix": 0, "unimportant": 0, "undetermined": 1, "foreign": 0}
 
 
 def osv(ecosystem="Ubuntu:24.04:LTS", events=None):
@@ -264,7 +358,7 @@ async def test_failed_refresh_never_uses_expired_public_data_as_current(cve, tmp
 
 
 async def test_host_check_sends_no_package_data_and_reports_counts(cve, tmp_path):
-    data = {"openssl": {"CVE-2026-1001": {"releases": {"bookworm": {"status": "open", "urgency": "high"}}}}}
+    data = {"openssl": {"CVE-2026-1001": {"releases": {"bookworm": {"status": "resolved", "fixed_version": "3.0.11-1~deb12u2", "urgency": "high"}}}}}
     ctx = context(tmp_path, json.dumps(data).encode())
     result = await cve.check_host(ctx, "host-1")
     assert result["status"] == "ok" and result["error"] is None

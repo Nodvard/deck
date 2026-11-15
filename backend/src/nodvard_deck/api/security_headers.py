@@ -48,6 +48,7 @@ def with_frame_ancestors(policy: str) -> str:
 
 def secure_headers(
     headers: Iterable[tuple[bytes, bytes]], path: str = "", *, https: bool = False, method: str = "GET",
+    hsts: bool = True,
 ) -> list[tuple[bytes, bytes]]:
     """Die Kopfzeilen einer Antwort auf `path` samt den festen Sicherheits-Kopfzeilen."""
     result: list[tuple[bytes, bytes]] = []
@@ -74,7 +75,7 @@ def secure_headers(
         ):
             value = b"cross-origin"
         result.append((name, value))
-    if https:
+    if https and hsts:
         result.append((b"strict-transport-security", b"max-age=31536000"))
     if not has_policy:
         result.append((CSP_HEADER, (DATA_POLICY if is_json else FRAME_ANCESTORS).encode("ascii")))
@@ -87,8 +88,9 @@ def _is_json(content_type: bytes) -> bool:
 
 
 class SecurityHeadersMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, *, hsts: bool = True) -> None:
         self.app = app
+        self.hsts = hsts
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -99,7 +101,7 @@ class SecurityHeadersMiddleware:
             if message["type"] == "http.response.start":
                 headers = secure_headers(
                     message.get("headers", []), scope.get("path", ""), https=scope.get("scheme") == "https",
-                    method=scope.get("method", "GET"),
+                    method=scope.get("method", "GET"), hsts=self.hsts,
                 )
                 message = {**message, "headers": headers}
             await send(message)

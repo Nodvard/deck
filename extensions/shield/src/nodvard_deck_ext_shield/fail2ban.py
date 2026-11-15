@@ -131,8 +131,11 @@ def command(values: dict[str, Any]) -> str:
                                  version=HELPER_VERSION, helper_only=True)
 
 
+READ_ARGS = ("fail2ban-config-read",)
+
+
 def read_command() -> str:
-    return av.via_helper(["fail2ban-config-read"], None, version=HELPER_VERSION, helper_only=True)
+    return av.via_helper(READ_ARGS, None, version=HELPER_VERSION, helper_only=True)
 
 
 def parse(output: str, peer: str) -> dict[str, Any]:
@@ -167,14 +170,16 @@ def parse(output: str, peer: str) -> dict[str, Any]:
     return {**settings(values), "runtime": runtime}
 
 
-async def read(ctx: Any, host: Any) -> dict[str, Any]:
+async def read(ctx: Any, host: Any, use: av.HelperUse | None = None) -> dict[str, Any]:
+    """Liest die Einstellungen. Ohne `use` legt das nie etwas auf dem Server ab."""
+    use = use or av.HelperUse(root=getattr(host, "credential_username", None) == "root")
     with ctx.exec.read_access(host):
         seen = await ctx.exec.run(host, ix.DECK_ADDRESS_COMMAND, timeout_s=15)
     if seen.exit_code != 0 or not (seen.stdout or "").strip():
         raise ValueError(ix.DECK_ADDRESS_UNKNOWN)
     peer = address(seen.stdout)
     with ctx.exec.read_access(host):
-        result = await ctx.exec.run(host, read_command(), timeout_s=30)
+        result = await use.call(lambda cmd: ctx.exec.run(host, cmd, timeout_s=30), read_command(), READ_ARGS)
     if result.exit_code != 0:
         output = av.helper_text((result.stdout or "") + (result.stderr or ""))
         raise ValueError(av.no_root_message(output) if av.NO_ROOT in output else output or "Fail2ban ist nicht lesbar.")

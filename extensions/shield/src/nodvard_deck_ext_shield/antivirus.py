@@ -5,14 +5,17 @@ Ausführen, Speichern und Melden steht in `defender.py`.
 
 from __future__ import annotations
 
+import base64
+import gzip
 import hashlib
 import posixpath
 import re
 import secrets
 import shlex
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from nodvard_sdk import root_helper_path
 
@@ -55,6 +58,10 @@ Prüfsumme noch seine Version prüfen."""
 NO_ROOT_HELPER_MISSING = "@@noroot-helper-missing"
 """Statt NO_ROOT_HELPER bei Unterbefehlen ohne alten Weg (`via_helper(helper_only=True)`): Auf dem Server liegt kein
 Hilfsskript."""
+NO_ROOT_AS_ROOT = "@@noroot-as-root"
+"""Hängt `HelperUse` an: Das Dashboard ist als root angemeldet, konnte das Hilfsskript aber nicht ablegen."""
+HELPER_INSTALLED = "@@helper-installed"
+HELPER_NOT_INSTALLED = "@@helper-not-installed"
 NO_ROOT_MESSAGE = (
     "Keine root-Rechte: Das Dashboard ist auf diesem Server nicht als root angemeldet und "
     "darf sudo nicht ohne Passwort nutzen."
@@ -198,12 +205,113 @@ def _helper_only(args: Sequence[str], version: int, matches: str | None) -> str:
     )
 
 
+def _packed_helper() -> str | None:
+    if HELPER_BUNDLED is None:
+        return None
+    try:
+        raw = HELPER_FILE.read_bytes()
+    except OSError:
+        return None
+    return base64.b64encode(gzip.compress(raw, 9, mtime=0)).decode("ascii")
+
+
+def helper_install_command() -> str | None:
+    """Legt als root das mitgelieferte Hilfsskript ab, mit denselben Prüfungen wie der Einrichtungsbefehl: Jeder Ordner
+    bis `/` gehört root und ist für niemanden sonst schreibbar, der entpackte Text hat die mitgelieferte Prüfsumme.
+    `None` ohne mitgeliefertes Skript."""
+    matches, blob = helper_matches(), _packed_helper()
+    if matches is None or blob is None:
+        return None
+    folder, helper = shlex.quote(posixpath.dirname(HELPER)), shlex.quote(HELPER)
+    return (
+        'W() { [ ! -L "$1" ] && [ "$(stat -c %u "$1" 2>/dev/null)" = 0 ] || return 1; '
+        'M=$(stat -c %a "$1" 2>/dev/null) || return 1; case "$M" in ""|*[2367]|*[2367]?) return 1;; esac; return 0; }; '
+        'WD() { P="$1"; while :; do W "$P" || return 1; [ "$P" = / ] && return 0; P=$(dirname "$P"); done; }; '
+        f'[ "$(id -u)" -eq 0 ] || exit 126; D={folder}; Y=; '
+        'if WD "$(dirname "$D")" && [ ! -L "$D" ] && install -d -m 0755 -o root -g root "$D" && W "$D" && Y=$(mktemp) '
+        f'&& printf %s {blob} | base64 -d 2>/dev/null | gzip -dc > "$Y" 2>/dev/null '
+        f'&& [ "$(sha256sum < "$Y")" = "{HELPER_BUNDLED[1]}  -" ] '
+        f'&& install -m 0755 -o root -g root "$Y" {helper} && W {helper} && {matches}; '
+        f"then rm -f \"$Y\"; echo '{HELPER_INSTALLED}'; "
+        f"else [ -z \"$Y\" ] || rm -f \"$Y\"; echo '{HELPER_NOT_INSTALLED}'; exit 1; fi"
+    )
+
+
+INLINE_READS = (("ssh-hardening", "status"), ("fail2ban-config-read",))
+"""Unterbefehle, die nur lesen und deshalb auch ohne abgelegtes Skript laufen dürfen."""
+
+
+def helper_inline_command(args: Sequence[str]) -> str | None:
+    """Lässt als root das mitgelieferte Hilfsskript für eine Leseabfrage aus `INLINE_READS` laufen, ohne es auf dem
+    Server abzulegen. `None` ohne mitgeliefertes Skript."""
+    call = tuple(args)
+    if not any(call[:len(read)] == read for read in INLINE_READS):
+        raise ValueError("Ohne abgelegtes Hilfsskript gehen nur Leseabfragen.")
+    blob = _packed_helper()
+    if blob is None:
+        return None
+    return (
+        '[ "$(id -u)" -eq 0 ] || exit 126; '
+        f"if S=$(printf %s {blob} | base64 -d 2>/dev/null | gzip -dc 2>/dev/null) "
+        f"&& [ \"$(printf '%s\\n' \"$S\" | sha256sum)\" = \"{HELPER_BUNDLED[1]}  -\" ]; "
+        f"then /bin/sh -c \"$S\" shield-root {' '.join(shlex.quote(a) for a in call)}; "
+        "else echo 'Das Hilfsskript von Nodvard Shield ließ sich auf dem Server nicht entpacken.' >&2; exit 1; fi"
+    )
+
+
+@dataclass(frozen=True)
+class HelperOnlyResult:
+    exit_code: int
+    stdout: str
+    stderr: str
+    duration_ms: int = 0
+
+
+@dataclass
+class HelperUse:
+    """Führt `helper_only`-Befehle aus und fängt für eine root-Anmeldung das fehlende oder fremde Hilfsskript ab: Mit
+    `install` (nur in einer freigegebenen Aktion) legt es das mitgelieferte ab und versucht den Befehl einmal neu, sonst
+    läuft eine Leseabfrage aus dem mitgelieferten Text, ohne etwas abzulegen."""
+
+    root: bool = False
+    install: bool = False
+    missing: bool = False
+    installed: bool = False
+
+    async def call(self, run: Callable[[str], Awaitable[Any]], command: str, read: Sequence[str] | None = None) -> Any:
+        result = await run(command)
+        lines = (result.stdout or "").splitlines()
+        unusable = NO_ROOT_HELPER_MISSING in lines or any(line.split(" ")[0] == NO_ROOT_HELPER for line in lines)
+        if not self.root or NO_ROOT not in lines or not unusable:
+            return result
+        self.missing = True
+        if not self.install:
+            inline = helper_inline_command(read) if read is not None else None
+            return result if inline is None else await run(inline)
+        install = helper_install_command()
+        if install is None:
+            return result
+        done = await run(install)
+        answer = (done.stdout or "").splitlines()
+        if done.exit_code == 0 and HELPER_INSTALLED in answer:
+            self.installed = True
+            return await run(command)
+        if HELPER_NOT_INSTALLED in answer:
+            return HelperOnlyResult(result.exit_code, f"{result.stdout}{NO_ROOT_AS_ROOT}\n", result.stderr or "")
+        return result
+
+
 _NO_ROOT_HELPER_RE = re.compile(rf"^{NO_ROOT_HELPER}(?: (.*))?$", re.MULTILINE)
 
 
 HELPER_RERUN = "Bitte den Server neu einrichten (Einrichtungsbefehl mit „Root-Rechte ohne Passwort“)."
 HELPER_MISSING_MESSAGE = ("Auf dem Server fehlt das Hilfsskript von Nodvard Shield, ohne das geht diese Aktion nicht. "
                           f"{HELPER_RERUN}")
+HELPER_INSTALL_NOTE = "Fehlt auf dem Server das Hilfsskript von Nodvard Shield, legt Deck es dabei als root ab."
+HELPER_LATER_NOTE = ("Das Hilfsskript von Nodvard Shield fehlt auf dem Server oder ist veraltet. Deck legt es beim "
+                     "ersten Anwenden ab.")
+HELPER_ROOT_MESSAGE = ("Deck ist hier als root angemeldet, konnte sein Hilfsskript aber nicht sicher ablegen. Meist darf "
+                       "in /usr/local/lib außer root jemand schreiben (Abhilfe: chmod g-w /usr/local /usr/local/lib).")
 
 
 def no_root_message(output: str | None) -> str:
@@ -211,6 +319,8 @@ def no_root_message(output: str | None) -> str:
     lässt, sagt sie das und verlangt „neu einrichten“. Sonst `NO_ROOT_MESSAGE`. Höchstens 200 Zeichen: Anzeigen mit
     einer Zeile schneiden sonst den Teil mit „neu einrichten“ ab."""
     text = output or ""
+    if HELPER_BUNDLED is not None and NO_ROOT_AS_ROOT in text.splitlines():
+        return HELPER_ROOT_MESSAGE
     if HELPER_BUNDLED is not None and NO_ROOT_HELPER_MISSING in text.splitlines():
         return HELPER_MISSING_MESSAGE
     if HELPER_BUNDLED is not None and NO_ROOT_HELPER_UNREADABLE in text.splitlines():

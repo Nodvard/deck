@@ -19,6 +19,7 @@ interface CveCheck {
   findings: CveFinding[];
   counts: { high: number; critical: number };
   error: string | null;
+  unrated?: { no_fix: number; unimportant: number; undetermined: number; foreign?: number } | null;
 }
 
 interface Certificate {
@@ -80,7 +81,11 @@ function CveResults({ check }: { check: CveCheck | null }) {
             <Badge tone={check.counts.critical ? "bad" : "neutral"}>{check.counts.critical} kritisch</Badge>
             <Badge tone={check.counts.high ? "bad" : "neutral"}>{check.counts.high} hoch</Badge>
           </div>
-          {check.findings.length === 0 ? <p className="text-sm text-white/55">Keine bekannten Sicherheitslücken im geprüften Paketbestand gefunden.</p> : (
+          {check.findings.length === 0 ? <p className="text-sm text-white/55">Keine Lücken, für die es eine Korrektur gibt.</p> : (
+            <>
+            {check.findings.some((finding) => finding.fixed_version) && (
+              <p className="mb-2 text-xs text-white/50">Für Funde mit Korrekturversion gilt: Es gibt beim Hersteller der Distribution eine Korrektur, installiert ist eine ältere Version: aktualisieren oder, bei Altpaketen ohne Quelle, entfernen.</p>
+            )}
             <ul className="divide-y divide-white/[0.06]">
               {check.findings.map((finding) => {
                 const severity = SEVERITIES[finding.severity.toLowerCase()] ?? { label: "Unbekannt", tone: "neutral" as Tone };
@@ -94,8 +99,17 @@ function CveResults({ check }: { check: CveCheck | null }) {
                 );
               })}
             </ul>
+            </>
           )}
         </>
+      )}
+      {complete && check.unrated && (check.unrated.no_fix > 0 || check.unrated.undetermined > 0 || (check.unrated.foreign ?? 0) > 0) && (
+        <p className="mt-3 text-xs text-white/50">
+          Nicht gemeldet:
+          {check.unrated.no_fix > 0 ? ` ${check.unrated.no_fix} Lücken ohne verfügbare Korrektur${check.unrated.unimportant > 0 ? ` (davon ${check.unrated.unimportant} von Debian als unbedeutend eingestuft)` : ""}.` : ""}
+          {check.unrated.undetermined > 0 ? ` ${check.unrated.undetermined} Lücken noch nicht bewertet.` : ""}
+          {(check.unrated.foreign ?? 0) > 0 ? ` ${check.unrated.foreign} Lücken bei Paketen, die nicht aus Debian stammen (nicht bewertbar).` : ""}
+        </p>
       )}
       <CheckedAt value={check.checked_at} />
     </>

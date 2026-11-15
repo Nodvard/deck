@@ -111,6 +111,7 @@ def _account_key(user_id: str) -> str:
 SETUP_ATTEMPT_KEY = "einrichtung"
 """Pseudo-Benutzername für die Drosselung falscher Einrichtungscodes (je IP)."""
 
+LOGIN_FAILED_MESSAGE = "Ungültiger Benutzername oder Passwort."
 MFA_EXHAUSTED_MESSAGE = "Zu viele falsche Zwei-Faktor-Codes. Bitte melde dich erneut an."
 MFA_TOKEN_USED_MESSAGE = "Dieser Anmeldeschritt wurde schon abgeschlossen. Bitte melde dich erneut an."
 TOTP_CODE_USED_MESSAGE = "Dieser Code wurde schon benutzt. Warte, bis die App einen neuen Code anzeigt."
@@ -149,7 +150,7 @@ def unknown_login_audit(settings: Settings, typed: str, *, length: int | None = 
     # Wer sein Passwort ins Namensfeld tippt, soll es im Protokoll nicht wiederfinden; das lesen auch Konten mit „Nur
     # ansehen“.
     key = settings.get_or_create_jwt_secret().encode("utf-8")
-    digest = hmac.new(key, b"login-username-ref\0" + typed.encode("utf-8"), hashlib.sha256).hexdigest()
+    digest = hmac.new(key, b"login-username-ref\0" + typed.encode("utf-8", errors="surrogatepass"), hashlib.sha256).hexdigest()
     return {"username_ref": digest[:12], "username_length": len(typed) if length is None else length}
 
 
@@ -489,6 +490,15 @@ def normalize_username(username: str) -> str:
     return username.strip().lower()
 
 
+def _storable(text: str) -> bool:
+    """Ob `text` gültiges Unicode ist; ein einzelnes Surrogat nimmt die Datenbank nicht an."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 USERNAME_MIN_LENGTH = 3
 _USERNAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]*")
 USERNAME_RULE_TEXT = (
@@ -672,7 +682,7 @@ async def login(
     foreign = login_limit.is_foreign(ip)
     attempt = _begin_attempt(ip, username, brake_name=foreign, password_login=foreign)
     user = None
-    if not too_long:
+    if not too_long and _storable(username):
         result = await session.execute(select(User).where(func.lower(User.username) == username))
         user = result.scalar_one_or_none()
     # Ab hier wartet die Anfrage auf die Passwort-Prüfung (Warteschlange, Argon2: auf einem Pi Sekunden). Die
@@ -703,7 +713,7 @@ async def login(
             actor_type="anonymous", username_detail=unknown,
         )
         await _commit_before_raising(session)
-        raise InvalidCredentials("Ungültiger Benutzername oder Passwort.")
+        raise InvalidCredentials(LOGIN_FAILED_MESSAGE)
 
     # Argon2 läuft in jedem Fall genau einmal, auch bei einem deaktivierten Konto, sonst antwortete es spürbar schneller
     # und verriete, dass es existiert. Es wird wie ein unbekannter Name gegen den Dummy-Hash geprüft, sein echter Hash
@@ -740,7 +750,7 @@ async def login(
         )
         scopes = await _record_failure(session, attempt, actor_id=user.id, user_agent=user_agent)
         await _commit_before_raising(session)
-        exc = InvalidCredentials("Ungültiger Benutzername oder Passwort.")
+        exc = InvalidCredentials(LOGIN_FAILED_MESSAGE)
         if login_limit.SCOPE_NAME in scopes:
             # Erst nach der Antwort: Die Meldung braucht Zeit, und die verriete sonst, dass es das Konto gibt.
             exc.after = functools.partial(_report_password_guessing, user.id)
@@ -1071,13 +1081,15 @@ async def refresh_access_token(
 async def _redeem_refresh_token(
     session: AsyncSession, settings: Settings, *, raw_refresh_token: str,
 ) -> IssuedTokens:
+    invalid = InvalidCredentials("Refresh-Token ungültig, widerrufen oder abgelaufen.")
+    if not _storable(raw_refresh_token):
+        raise invalid
     token_hash = security.hash_opaque_token(raw_refresh_token)
     result = await session.execute(
         select(RefreshToken).where(RefreshToken.token_hash == token_hash)
     )
     token_row = result.scalar_one_or_none()
 
-    invalid = InvalidCredentials("Refresh-Token ungültig, widerrufen oder abgelaufen.")
     now = utcnow()
     if token_row is None or token_row.expires_at < now:
         raise invalid
@@ -1295,6 +1307,8 @@ async def revoke_refresh_tokens(
 
 async def logout(session: AsyncSession, *, raw_refresh_token: str) -> None:
     """Kein Fehler, wenn der Token schon widerrufen oder unbekannt ist: Abmelden gelingt aus Client-Sicht immer."""
+    if not _storable(raw_refresh_token):
+        return
     token_hash = security.hash_opaque_token(raw_refresh_token)
     result = await session.execute(
         select(RefreshToken).where(RefreshToken.token_hash == token_hash)

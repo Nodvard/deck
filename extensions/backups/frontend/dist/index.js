@@ -619,7 +619,7 @@ function formatBytes(n, options = {}) {
   if (options.fixed) {
     if (n <= 0) return "0 B";
     const i2 = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
-    return `${(n / 1024 ** i2).toFixed(1)} ${units[i2]}`;
+    return `${(n / 1024 ** i2).toFixed(1).replace(/\.0$/, "")} ${units[i2]}`;
   }
   let value = n;
   let i = 0;
@@ -627,7 +627,8 @@ function formatBytes(n, options = {}) {
     value /= 1024;
     i += 1;
   }
-  return `${value.toFixed(value < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+  const text = value.toFixed(value < 10 && i > 0 ? 1 : 0);
+  return `${i >= 3 ? text.replace(/\.0$/, "") : text} ${units[i]}`;
 }
 
 // src/RestoreCopy.tsx
@@ -870,8 +871,8 @@ function RestoreCopyPanel({ target, onDone }) {
 // src/BackupsPage.tsx
 import { Fragment as Fragment5, jsx as jsx6, jsxs as jsxs6 } from "react/jsx-runtime";
 function formatSize(bytes) {
-  if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1)} TB`;
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1).replace(/\.0$/, "")} TB`;
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1).replace(/\.0$/, "")} GB`;
   return `${Math.round(bytes / 1e6)} MB`;
 }
 function useInventory() {

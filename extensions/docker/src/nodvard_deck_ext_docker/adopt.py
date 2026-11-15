@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from .capabilities import is_own_container
+from .compose_errors import COMPOSE_MISSING, scrub_compose_output
 from .env_values import valid_env_names
 from .image_apply import MAX_FILES, PROJECT_RE, _valid_path, is_self_image
 from .image_updates import _write_atomic
@@ -204,7 +205,7 @@ async def problems(ctx: Any, stacks: DockerStacks, host: Any, stack: Stack) -> l
     result = await stacks._exec(host, cmd_validate(stack), VALIDATE_TIMEOUT_S)
     if result.exit_code != 0:
         output = result.stdout.splitlines()
-        if any("is not a docker command" in line or "unknown command" in line for line in output):
+        if any("unknown command" in line for line in output) or COMPOSE_MISSING in scrub_compose_output(result.stdout):
             return [NO_COMPOSE_V2]
         return [f"Docker Compose kann die Datei nicht lesen: {first_reason(output)}"]
     return []

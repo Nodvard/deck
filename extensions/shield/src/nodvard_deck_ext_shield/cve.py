@@ -30,6 +30,7 @@ _LOCKS: dict[str, asyncio.Lock] = {}
 _CVE = re.compile(r"CVE-[0-9]{4}-[0-9]{4,}")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9+._:~-]*")
 _VERSION = re.compile(r"[0-9][A-Za-z0-9+.:~^_-]*")
+_FOREIGN_VERSION = re.compile(r"[-+~.](?:pve|pmx)[0-9]")
 _SEVERITY = {"critical": 4, "high": 3, "medium": 2, "low": 1, "unknown": 0}
 
 INVENTORY_COMMAND = r"""set -eu
@@ -278,10 +279,15 @@ async def source_json(ctx: Any, url: str) -> Any:
         raise SourceError("Die öffentliche CVE-Datenquelle liefert ungültiges JSON.") from exc
 
 
-def match_debian(inventory: Inventory, data: Any) -> list[dict[str, Any]]:
+def match_debian(inventory: Inventory, data: Any, unrated: dict[str, int] | None = None) -> list[dict[str, Any]]:
+    """Meldet nur Einträge, deren Korrekturversion neuer ist als die installierte.
+
+    Den Rest zählt `unrated`: no_fix, unimportant, undetermined und foreign (Pakete nicht aus Debian).
+    """
     if not isinstance(data, dict) or not data:
         raise SourceError("Die Debian-Sicherheitsdaten sind leer oder ungültig.")
     findings = []
+    seen: dict[str, set[tuple[str, str]]] = {"no_fix": set(), "unimportant": set(), "undetermined": set(), "foreign": set()}
     covered = False
     for records in data.values():
         if not isinstance(records, dict):
@@ -302,19 +308,27 @@ def match_debian(inventory: Inventory, data: Any) -> list[dict[str, Any]]:
             fixed = release.get("fixed_version")
             if fixed == "0":
                 continue
-            if status not in {"resolved", "open"}:
-                raise Unsupported("Der Debian Security Tracker hat die Betroffenheit eines installierten Pakets noch nicht bestimmt.")
             if fixed and (not isinstance(fixed, str) or not _VERSION.fullmatch(fixed)):
                 raise SourceError("Die Debian-Sicherheitsdaten enthalten eine ungültige Korrekturversion.")
-            if fixed:
-                affected = deb_compare(package.source_version, fixed) < 0
+            key = (package.source, cve)
+            if status not in {"resolved", "open"}:
+                bucket = "undetermined"
+            elif not fixed:
+                bucket = "no_fix"
+            elif deb_compare(package.source_version, fixed) < 0:
+                bucket = "finding"
             else:
-                if status == "resolved":
-                    raise SourceError("In den Debian-Sicherheitsdaten fehlt eine Korrekturversion.")
-                fixed = None
-                affected = status == "open"
-            if affected:
+                continue
+            if _FOREIGN_VERSION.search(package.source_version):
+                seen["foreign"].add(key)
+            elif bucket == "finding":
                 findings.append(finding(package, cve, release.get("urgency"), fixed))
+            else:
+                seen[bucket].add(key)
+                if bucket == "no_fix" and str(release.get("urgency") or "").lower().startswith("unimportant"):
+                    seen["unimportant"].add(key)
+    if unrated is not None:
+        unrated.update({name: len(keys) for name, keys in seen.items()})
     return findings
 
 
@@ -644,7 +658,8 @@ async def rpm_findings(ctx: Any, inventory: Inventory) -> list[dict[str, Any]]:
 async def check_host(ctx: Any, host_id: str) -> dict[str, Any]:
     """Liest den Server und lädt Distributionsdaten ausschließlich über das Deck."""
     result: dict[str, Any] = {"status": "error", "checked_at": time.time(), "findings": [],
-                              "counts": {"high": 0, "critical": 0}, "error": None}
+                              "counts": {"high": 0, "critical": 0}, "error": None, "unrated": None}
+    unrated: dict[str, int] = {}
     try:
         host = await ctx.hosts.get(host_id)
         if host is None:
@@ -656,7 +671,7 @@ async def check_host(ctx: Any, host_id: str) -> dict[str, Any]:
         inventory = parse_inventory(response.stdout or "")
         if inventory.distro == "debian":
             data = await source_json(ctx, DEBIAN_URL)
-            rows = await asyncio.to_thread(match_debian, inventory, data)
+            rows = await asyncio.to_thread(match_debian, inventory, data, unrated)
         elif inventory.distro == "ubuntu":
             body = await source_bytes(ctx, UBUNTU_OSV_URL)
             rows = await asyncio.to_thread(match_ubuntu_osv, inventory, body)
@@ -676,7 +691,7 @@ async def check_host(ctx: Any, host_id: str) -> dict[str, Any]:
             if fixed and (not old_fixed or compare(fixed, old_fixed) < 0):
                 previous["fixed_version"] = fixed
         findings = sorted(unique.values(), key=lambda row: (-_SEVERITY[row["severity"]], row["package"], row["cve"]))
-        result.update(status="ok", findings=findings,
+        result.update(status="ok", findings=findings, unrated=unrated or None,
                       counts={level: sum(row["severity"] == level for row in findings) for level in ("high", "critical")})
     except Unsupported as exc:
         result.update(status="unsupported", error=str(exc))

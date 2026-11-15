@@ -239,6 +239,9 @@ class Settings(BaseSettings):
     csp_legacy: bool = False
     """Veraltet: NODVARD_DECK_CSP_LEGACY wird für bestehende Konfigurationen akzeptiert, aber mit Logwarnung ignoriert.
     Die Inhaltsrichtlinie bleibt strikt."""
+    hsts: bool = True
+    """NODVARD_DECK_HSTS: `false` lässt `Strict-Transport-Security` weg. HSTS gilt für den Rechnernamen samt allen
+    Ports, also auch für andere Dienste, die dort nur über http laufen."""
 
     telemetry_url: str = ""
     """Empfänger-Basisadresse, z. B. https://telemetrie.example.invalid. Leer bedeutet kein Versand."""

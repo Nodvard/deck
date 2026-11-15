@@ -233,6 +233,7 @@ def test_tls_still_checks_the_name_not_the_pinned_address(tmp_path):
 
     server = HTTPServer(("127.0.0.1", 0), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(leaf)
     context.sni_callback = lambda sock, name, ctx: seen.__setitem__("sni", name)
     server.socket = context.wrap_socket(server.socket, server_side=True)

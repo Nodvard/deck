@@ -338,7 +338,7 @@ async def login(
     except auth_service.InvalidCredentials as exc:
         # Als Antwort statt als HTTPException, damit `after` erst nach dem Senden läuft.
         return JSONResponse(
-            {"detail": str(exc)},
+            {"detail": auth_service.LOGIN_FAILED_MESSAGE},
             status_code=status.HTTP_401_UNAUTHORIZED,
             background=BackgroundTask(exc.after) if exc.after is not None else None,
         )

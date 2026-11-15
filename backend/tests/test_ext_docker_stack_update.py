@@ -1000,7 +1000,7 @@ async def test_the_plan_names_volumes_size_and_space(tmp_path, monkeypatch):
                                      "folder": "/home/deck/nodvard-sicherungen/shop/", "error": None}
     env.docker.free_kb = 1024 * 1024
     plan = await env.update.plan(env.host, env.stack)
-    assert plan["volume_backup"]["error"] == "Zu wenig Platz: Die Volumes brauchen bis zu 2,0 GB, frei sind 1,0 GB."
+    assert plan["volume_backup"]["error"] == "Zu wenig Platz: Die Volumes brauchen bis zu 2 GB, frei sind 1 GB."
 
 
 @pytest.mark.asyncio

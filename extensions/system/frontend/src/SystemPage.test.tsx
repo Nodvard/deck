@@ -160,6 +160,44 @@ describe("SystemPage", () => {
     }
   });
 
+  it("Netzlaufwerke und ein Zeitlimit beim Lesen der Platten werden angezeigt, nicht verschwiegen", async () => {
+    window.history.replaceState({}, "", "/ext/system/system?host=h-pi");
+    try {
+      const info: SystemInfo = { ...INFO, df_failed: true, network_mounts: [{ fstype: "nfs4", mount: "/mnt/pve/nas", device: "nas.example:/export/backup" }] };
+      const live: LiveData = { ...LIVE, df_failed: true, network_mounts: info.network_mounts };
+      vi.stubGlobal("fetch", mockFetch([], 200, info, live));
+      render(<SystemPage />);
+      expect((await screen.findByTestId("live-df-timeout")).textContent).toContain("Plattenbelegung konnte nicht gelesen werden");
+      expect(screen.getByTestId("live-network-mounts").textContent).toContain("Netzlaufwerk, Belegung nicht gemessen");
+      fireEvent.click(await screen.findByRole("tab", { name: "Zustand & Updates" }));
+      expect((await screen.findByTestId("df-timeout")).textContent).toContain("Plattenbelegung konnte nicht gelesen werden");
+      expect(screen.getByTestId("network-mounts").textContent).toContain("/mnt/pve/nas · nas.example:/export/backup · nfs4");
+    } finally {
+      window.history.replaceState({}, "", "/");
+    }
+  });
+
+  it.each([
+    { status: "timeout", text: "Die Plattenbelegung konnte nicht gelesen werden: Der Server hat nicht rechtzeitig geantwortet, wahrscheinlich hängt ein Laufwerk." },
+    { status: "failed", text: "Die Plattenbelegung konnte nicht gelesen werden." },
+    { status: "unavailable", text: "Die Plattenbelegung konnte auf dem Server nicht gemessen werden." },
+  ])("Hinweis zur Plattenbelegung passt zur Marke $status, und oben steht nicht „Alles in Ordnung“", async ({ status, text }) => {
+    window.history.replaceState({}, "", "/ext/system/system?host=h-pi");
+    try {
+      const finding = { tone: "warn", text: "Plattenbelegung konnte nicht gelesen werden" };
+      const info: SystemInfo = { ...INFO, disks: [], failed_units: [], df_failed: true, df_status: status, findings: [finding] };
+      vi.stubGlobal("fetch", mockFetch([], 200, info, { ...LIVE, filesystems: [], df_failed: true, df_status: status }));
+      render(<SystemPage />);
+      expect((await screen.findByTestId("live-df-timeout")).textContent).toBe(text);
+      fireEvent.click(await screen.findByRole("tab", { name: "Zustand & Updates" }));
+      expect((await screen.findByTestId("df-timeout")).textContent).toBe(text);
+      expect(screen.getByTestId("findings").textContent).toBe(finding.text);
+      expect(screen.queryByText(/Alles in Ordnung/)).toBeNull();
+    } finally {
+      window.history.replaceState({}, "", "/");
+    }
+  });
+
   it("Temperatur über der Warnschwelle wird gelb markiert, darunter nicht", async () => {
     window.history.replaceState({}, "", "/ext/system/system?host=h-pi");
     try {

@@ -420,7 +420,7 @@ def create_app() -> FastAPI:
     app.add_middleware(ErrorMiddleware)
     app.add_middleware(BodyLimitMiddleware, max_body_bytes=settings.max_body_bytes)
     # Nach der Größen-Grenze eingehängt, also weiter außen: Auch ihre 413 bekommt die Sicherheits-Kopfzeilen.
-    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware, hsts=settings.hsts)
     # Echte Client-Adresse und echtes Schema hinter einem vertrauenswürdigen Proxy (api/proxy_headers.py). Zuletzt
     # hinzugefügt = ganz außen: alles danach (auch die Routen) sieht schon die echte Adresse.
     app.add_middleware(ProxyHeadersMiddleware)

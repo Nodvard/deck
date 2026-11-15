@@ -229,3 +229,73 @@ async def test_the_value_never_leaves_the_server(client, docker_on, caplog):
 
     for text in seen:
         assert SECRET not in text and SECRET.replace("-", "\\u002d") not in text and REST not in text
+
+
+# Ausgaben von docker.io 20.10 und 26.1 ohne Compose-Plugin; die Hilfe von Docker ist hier gekürzt (echt rund 95 Zeilen).
+HELP = "\nUsage:  docker [OPTIONS] COMMAND\n\nA self-sufficient runtime for containers\n\nCommands:\n  attach      Attach local standard input, output, and error streams to a running container\n"
+NO_PLUGIN = [
+    "unknown flag: --ansi\nSee 'docker --help'.\n" + HELP,
+    "unknown shorthand flag: 'p' in -p\nSee 'docker --help'.\n" + HELP,
+    "docker: 'compose' is not a docker command.\nSee 'docker --help'\n",
+    "unknown flag: --ansi\n\nUsage:  docker [OPTIONS] COMMAND [ARGS]...\n\nRun 'docker --help' for more information\n",
+]
+
+
+@pytest.mark.parametrize("raw", NO_PLUGIN)
+def test_missing_compose_plugin_gets_only_the_clear_sentence(raw):
+    from nodvard_deck_ext_docker.compose_errors import COMPOSE_MISSING, scrub_compose_output
+
+    assert scrub_compose_output(raw).strip() == COMPOSE_MISSING
+
+
+def test_sentence_replaces_the_hit_in_place_and_marks_keep_their_order():
+    from nodvard_deck_ext_docker.compose_errors import COMPOSE_MISSING, scrub_compose_output
+
+    out = scrub_compose_output("@@rc=125\n@@step=pull\n@@tail\n" + NO_PLUGIN[0])
+    assert out == f"@@rc=125\n@@step=pull\n@@tail\n{COMPOSE_MISSING}\n"
+    out = scrub_compose_output("@@step=up\n" + NO_PLUGIN[1] + "@@rc=125\n")
+    assert out == f"@@step=up\n{COMPOSE_MISSING}\n@@rc=125\n"
+
+
+def test_detached_poll_still_reads_state_rc_and_step():
+    from nodvard_deck_ext_docker.compose_errors import COMPOSE_MISSING, scrub_compose_output
+    from nodvard_deck_ext_docker.detached import parse_poll
+
+    done = parse_poll(scrub_compose_output("@@rc=125\n@@step=pull\n@@tail\n" + NO_PLUGIN[0]))
+    assert (done.state, done.rc, done.step) == ("done", 125, "pull")
+    assert COMPOSE_MISSING in done.output
+    running = parse_poll(scrub_compose_output("@@running\n@@step=pull\n@@tail\n" + NO_PLUGIN[0]))
+    assert (running.state, running.step) == ("running", "pull")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "unknown flag: --format\n",
+        "unknown flag: --format\nSee 'docker --help'.\n",
+        "unknown shorthand flag: 'z' in -z\n",
+        "unknown flag: --ansi\n",
+        "unknown flag: --ansi\nweiter mit etwas anderem\n",
+        "build failed: unknown flag: --ansi in step 3\nSee 'docker --help'.\n",
+        "service web: unknown shorthand flag: 'p' in -p\n",
+    ],
+)
+def test_other_unknown_flags_stay_untouched(raw):
+    from nodvard_deck_ext_docker.compose_errors import scrub_compose_output
+
+    assert scrub_compose_output(raw) == raw
+
+
+@pytest.mark.parametrize("raw", NO_PLUGIN)
+def test_failure_reason_is_the_sentence_not_a_help_line(raw):
+    from nodvard_deck_ext_docker.compose_errors import COMPOSE_MISSING
+    from nodvard_deck_ext_docker.stack_actions import failure_line
+
+    assert failure_line(raw) == COMPOSE_MISSING
+
+
+def test_other_compose_errors_stay_untouched():
+    from nodvard_deck_ext_docker.compose_errors import scrub_compose_output
+
+    raw = "no configuration file provided: not found\n"
+    assert scrub_compose_output(raw) == raw

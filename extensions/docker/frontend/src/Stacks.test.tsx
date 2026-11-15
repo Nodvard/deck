@@ -463,7 +463,7 @@ describe("Stack-Aktionen", () => {
     serve({ "/stacks/app/update": () => Response.json({
       services: [{ service: "web", container: "app-web-1", image: "nginx:1.27", status: "update", reason: null, data_store: false, backup: false, volumes: ["app_daten"] }],
       updates: ["web"], data_store: false, rollback: [],
-      volume_backup: { volumes: { app_daten: 9 * 1024 ** 3 }, free_bytes: 1024 ** 3, folder: "/home/deck/nodvard-sicherungen/app/", error: "Zu wenig Platz: Die Volumes brauchen bis zu 9,0 GB, frei sind 1,0 GB." },
+      volume_backup: { volumes: { app_daten: 9 * 1024 ** 3 }, free_bytes: 1024 ** 3, folder: "/home/deck/nodvard-sicherungen/app/", error: "Zu wenig Platz: Die Volumes brauchen bis zu 9 GB, frei sind 1 GB." },
     }) });
     render(<ContainersPage />);
     fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Update" }));

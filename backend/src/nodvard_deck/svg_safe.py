@@ -14,6 +14,7 @@ SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 MAX_SVG_CSP_BYTES = 4096
+MAX_SVG_DEPTH = 100
 
 # Namensräume, die Zeichenprogramme (Inkscape, Illustrator) mitschreiben. Sie werden
 # nirgends ausgewertet; nur die Elemente und Attribute selbst sind harmlos.
@@ -91,13 +92,16 @@ def nonce_svg(content: bytes, nonce: str) -> tuple[bytes, list[str]] | None:
     """SVG-Stile mit Nonce und Hashes für unveränderte Stilattribute freigeben."""
     try:
         root = SafeET.fromstring(content, forbid_dtd=False, forbid_entities=True, forbid_external=True)
-    except (SafeET.ParseError, ValueError, UnicodeError, LookupError):
+    except (SafeET.ParseError, ValueError, UnicodeError, LookupError, RecursionError):
         return None
-    hashes = _style_hashes(root, nonce)
-    for element in root.iter():
-        if element.tag == f"{{{SVG_NS}}}style":
-            element.set("nonce", nonce)
-    return SafeET.tostring(root, encoding="utf-8"), hashes
+    try:
+        hashes = _style_hashes(root, nonce)
+        for element in root.iter():
+            if element.tag == f"{{{SVG_NS}}}style":
+                element.set("nonce", nonce)
+        return SafeET.tostring(root, encoding="utf-8"), hashes
+    except RecursionError:
+        return None
 
 
 def _local(name: str) -> tuple[str, str]:
@@ -158,6 +162,21 @@ def check_svg(content: bytes) -> None:
         raise UnsafeSvg("Das SVG enthält eine Verarbeitungsanweisung (<?...?>) und wird nicht angenommen.")
 
     guard.ProcessingInstructionHandler = _pi_not_allowed
+
+    depth = 0
+
+    def _enter(_name, _attrs) -> None:
+        nonlocal depth
+        depth += 1
+        if depth > MAX_SVG_DEPTH:
+            raise UnsafeSvg(f"Das SVG ist zu tief verschachtelt (mehr als {MAX_SVG_DEPTH} Ebenen).")
+
+    def _leave(_name) -> None:
+        nonlocal depth
+        depth -= 1
+
+    guard.StartElementHandler = _enter
+    guard.EndElementHandler = _leave
     # Den Baum liest `defusedxml`: Auch wenn die Vorprüfung mit expat einmal etwas durchließe, löst der Parser weder
     # Entitäten noch externe Verweise auf (XXE).
     try:
@@ -167,7 +186,7 @@ def check_svg(content: bytes) -> None:
         raise
     # `LookupError`: unbekannte Zeichenkodierung in der Kopfzeile (`encoding='bogus'`).
     # `ValueError` umfasst auch die Ablehnungen von defusedxml (`DefusedXmlException`).
-    except (expat.ExpatError, SafeET.ParseError, ValueError, UnicodeError, LookupError) as exc:
+    except (expat.ExpatError, SafeET.ParseError, ValueError, UnicodeError, LookupError, RecursionError) as exc:
         raise UnsafeSvg("Das ist keine gültige SVG-Datei.") from exc
 
     if _local(root.tag) != (SVG_NS, "svg"):

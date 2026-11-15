@@ -130,7 +130,7 @@ it.each(["error", "unsupported"])("gibt bei CVE-Status %s und fehlender externer
   expect(screen.getByText(/Paketbestand nicht prüfbar/)).toBeInTheDocument();
   expect(screen.getByText(/Externe Prüfung nicht abgeschlossen.*Zeitüberschreitung/)).toBeInTheDocument();
   expect(screen.queryByText("0 kritisch")).toBeNull();
-  expect(screen.queryByText(/Keine bekannten Sicherheitslücken/)).toBeNull();
+  expect(screen.queryByText(/Keine Lücken, für die es eine Korrektur gibt/)).toBeNull();
   expect(screen.queryByText(/Keine der geprüften Verbindungen/)).toBeNull();
 });
 
@@ -173,4 +173,44 @@ it("sagt, dass die Außenprüfung aus dem Heimnetz und nicht aus dem Internet pr
   render(<SecurityChecks canManage={false} />);
   await screen.findByTestId("checks-server/1");
   expect(screen.getByText(/geprüft aus dem Heimnetz \(von Deck aus\), nicht aus dem Internet/)).toBeInTheDocument();
+});
+
+it("zeigt Einträge ohne Korrektur und unbewertete Einträge dezent unter dem Ergebnis", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => json({ hosts: [{ ...HOST,
+    cve: { ...HOST.cve, findings: [], counts: { high: 0, critical: 0 }, unrated: { no_fix: 12, unimportant: 5, undetermined: 3, foreign: 2 } },
+  }] })));
+  render(<SecurityChecks canManage />);
+  await screen.findByTestId("checks-server/1");
+  const note = screen.getByText(/Nicht gemeldet:/);
+  expect(note.textContent).toMatch(/12 Lücken ohne verfügbare Korrektur \(davon 5 von Debian als unbedeutend eingestuft\)\. 3 Lücken noch nicht bewertet\. 2 Lücken bei Paketen, die nicht aus Debian stammen/);
+  expect(screen.getByText("Keine Lücken, für die es eine Korrektur gibt.")).toBeInTheDocument();
+});
+
+it("nennt bei Funden den Hersteller der Distribution statt Debian", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => json({ hosts: [HOST] })));
+  render(<SecurityChecks canManage />);
+  await screen.findByTestId("checks-server/1");
+  expect(screen.getByText(/beim Hersteller der Distribution eine Korrektur/)).toBeInTheDocument();
+  expect(screen.queryByText(/bei Debian eine Korrektur/)).toBeNull();
+});
+
+it("bezieht den Korrektur-Hinweis in einer gemischten Liste nur auf Funde mit Korrekturversion", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => json({ hosts: [HOST] })));
+  render(<SecurityChecks canManage />);
+  await screen.findByTestId("checks-server/1");
+  expect(screen.getByText(/^Für Funde mit Korrekturversion gilt: Es gibt beim Hersteller der Distribution eine Korrektur/)).toBeInTheDocument();
+  expect(screen.queryByText(/Für diese Pakete gibt es/)).toBeNull();
+  expect(screen.getByText("Behoben ab: 3.0.2")).toBeInTheDocument();
+  expect(screen.getByText("Noch keine behobene Version bekannt.")).toBeInTheDocument();
+});
+
+it("zeigt keinen Korrektur-Hinweis, wenn kein Fund eine Korrekturversion hat", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => json({ hosts: [{ ...HOST,
+    cve: { ...HOST.cve, findings: [HOST.cve.findings[1]], counts: { high: 1, critical: 0 } },
+  }] })));
+  render(<SecurityChecks canManage />);
+  await screen.findByTestId("checks-server/1");
+  expect(screen.getByText("CVE-2026-5678")).toBeInTheDocument();
+  expect(screen.getByText("Noch keine behobene Version bekannt.")).toBeInTheDocument();
+  expect(screen.queryByText(/eine Korrektur/)).toBeNull();
 });

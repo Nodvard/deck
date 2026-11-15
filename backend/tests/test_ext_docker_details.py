@@ -62,6 +62,31 @@ def test_images_unused_first_largest_first_and_old_docker_without_counts():
     assert old[0]["in_use"] is None
 
 
+NAMED_29 = (
+    '{"Containers":"1","CreatedAt":"2026-10-12 23:11:32 +0200 CEST","CreatedSince":"4 weeks ago","Digest":"<none>",'
+    '"ID":"f6ded99b9c2f","Repository":"app-a","SharedSize":"N/A","Size":"658MB","Tag":"latest","UniqueSize":"N/A"}\n'
+)
+DANGLING_29 = (
+    '{"Containers":"0","CreatedAt":"2026-10-12 23:11:32 +0200 CEST","CreatedSince":"4 weeks ago","Digest":"<none>",'
+    '"ID":"368f633203d4","Repository":"<none>","SharedSize":"N/A","Size":"11.3MB","Tag":"<none>","UniqueSize":"N/A"}\n'
+    '{"Containers":"0","CreatedAt":"2026-10-12 23:10:02 +0200 CEST","CreatedSince":"4 weeks ago","Digest":"<none>",'
+    '"ID":"0badc0ffee00","Repository":"<none>","SharedSize":"N/A","Size":"141MB","Tag":"<none>","UniqueSize":"N/A"}\n'
+)
+
+
+def test_dangling_images_come_from_the_filtered_list():
+    images = _mod().parse_images(NAMED_29, DANGLING_29)
+    assert [(i["id"], i["name"], i["dangling"]) for i in images] == [
+        ("0badc0ffee00", None, True), ("368f633203d4", None, True), ("f6ded99b9c2f", "app-a:latest", False),
+    ]
+    assert _mod().parse_images(NAMED_29) == [images[2]]
+
+
+def test_dangling_images_listed_twice_count_once():
+    images = _mod().parse_images(NAMED_29 + DANGLING_29, DANGLING_29)
+    assert sorted(i["id"] for i in images) == ["0badc0ffee00", "368f633203d4", "f6ded99b9c2f"]
+
+
 def test_inspect_is_a_whitelist_env_values_never_leave():
     raw = {
         "Name": "/nextcloud-db",

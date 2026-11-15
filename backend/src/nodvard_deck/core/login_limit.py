@@ -246,7 +246,7 @@ def _retry_after_window(dq: deque[float], limit: int, window: float, now: float)
 
 
 def _name_slot(username: str) -> int:
-    digest = hashlib.blake2b(username.encode("utf-8"), key=_NAME_KEY, digest_size=8).digest()
+    digest = hashlib.blake2b(username.encode("utf-8", errors="surrogatepass"), key=_NAME_KEY, digest_size=8).digest()
     return int.from_bytes(digest, "big") % NAME_SLOTS
 
 
@@ -309,7 +309,7 @@ def _sweep(now: float) -> None:
 
 
 def _mfa_key(mfa_token: str) -> str:
-    return hashlib.sha256(mfa_token.encode("utf-8")).hexdigest()
+    return hashlib.sha256(mfa_token.encode("utf-8", errors="surrogatepass")).hexdigest()
 
 
 def begin(

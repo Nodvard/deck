@@ -744,7 +744,7 @@ function formatBytes(n, options = {}) {
   if (options.fixed) {
     if (n <= 0) return "0 B";
     const i2 = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
-    return `${(n / 1024 ** i2).toFixed(1)} ${units[i2]}`;
+    return `${(n / 1024 ** i2).toFixed(1).replace(/\.0$/, "")} ${units[i2]}`;
   }
   let value = n;
   let i = 0;
@@ -752,7 +752,8 @@ function formatBytes(n, options = {}) {
     value /= 1024;
     i += 1;
   }
-  return `${value.toFixed(value < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+  const text = value.toFixed(value < 10 && i > 0 ? 1 : 0);
+  return `${i >= 3 ? text.replace(/\.0$/, "") : text} ${units[i]}`;
 }
 
 // src/format.ts
@@ -762,6 +763,11 @@ function formatUptime(seconds) {
   const hours = Math.floor(seconds % 86400 / 3600);
   const minutes = Math.floor(seconds % 3600 / 60);
   return days > 0 ? `${days} d ${hours} h` : hours > 0 ? `${hours} h ${minutes} min` : `${minutes} min`;
+}
+function dfFailedText(status) {
+  if (status === "timeout") return "Die Plattenbelegung konnte nicht gelesen werden: Der Server hat nicht rechtzeitig geantwortet, wahrscheinlich h\xE4ngt ein Laufwerk.";
+  if (status === "unavailable") return "Die Plattenbelegung konnte auf dem Server nicht gemessen werden.";
+  return "Die Plattenbelegung konnte nicht gelesen werden.";
 }
 
 // src/LiveView.tsx
@@ -1217,23 +1223,34 @@ function LiveView({ hostId, fetchLive }) {
         ] })
       }
     ),
-    /* @__PURE__ */ jsx7(Section, { title: "Dateisysteme", children: /* @__PURE__ */ jsx7("table", { role: "table", className: `${CARD_TABLE} text-left`, "data-testid": "live-filesystems", children: /* @__PURE__ */ jsx7("tbody", { role: "rowgroup", className: CARD_BODY, children: data.filesystems.map((f) => /* @__PURE__ */ jsxs6("tr", { role: "row", className: CARD_ROW, children: [
-      /* @__PURE__ */ jsx7("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 font-mono text-xs`, children: f.mount }),
-      /* @__PURE__ */ jsxs6("td", { "data-label": "Ger\xE4t", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs opacity-50`, children: [
-        f.device,
+    /* @__PURE__ */ jsxs6(Section, { title: "Dateisysteme", children: [
+      /* @__PURE__ */ jsx7("table", { role: "table", className: `${CARD_TABLE} text-left`, "data-testid": "live-filesystems", children: /* @__PURE__ */ jsx7("tbody", { role: "rowgroup", className: CARD_BODY, children: data.filesystems.map((f) => /* @__PURE__ */ jsxs6("tr", { role: "row", className: CARD_ROW, children: [
+        /* @__PURE__ */ jsx7("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 font-mono text-xs`, children: f.mount }),
+        /* @__PURE__ */ jsxs6("td", { "data-label": "Ger\xE4t", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs opacity-50`, children: [
+          f.device,
+          " \xB7 ",
+          f.fstype
+        ] }),
+        /* @__PURE__ */ jsx7("td", { "data-label": "Belegung", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] w-full sm:w-48 sm:py-1`, children: /* @__PURE__ */ jsx7(Meter, { percent: f.percent }) }),
+        /* @__PURE__ */ jsxs6("td", { "data-label": "Verwendet", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:pl-3 sm:text-right text-xs tabular-nums`, children: [
+          formatBytes(f.used),
+          " / ",
+          formatBytes(f.size),
+          " (",
+          f.percent.toFixed(0),
+          " %)"
+        ] })
+      ] }, `${f.device}-${f.mount}`)) }) }),
+      data.df_failed && /* @__PURE__ */ jsx7("p", { className: "mt-2 text-sm text-amber-300", "data-testid": "live-df-timeout", children: dfFailedText(data.df_status) }),
+      (data.network_mounts?.length ?? 0) > 0 && /* @__PURE__ */ jsx7("ul", { className: "mt-2 text-xs opacity-70", "data-testid": "live-network-mounts", children: data.network_mounts?.map((m) => /* @__PURE__ */ jsxs6("li", { children: [
+        m.mount,
         " \xB7 ",
-        f.fstype
-      ] }),
-      /* @__PURE__ */ jsx7("td", { "data-label": "Belegung", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] w-full sm:w-48 sm:py-1`, children: /* @__PURE__ */ jsx7(Meter, { percent: f.percent }) }),
-      /* @__PURE__ */ jsxs6("td", { "data-label": "Verwendet", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:pl-3 sm:text-right text-xs tabular-nums`, children: [
-        formatBytes(f.used),
-        " / ",
-        formatBytes(f.size),
-        " (",
-        f.percent.toFixed(0),
-        " %)"
-      ] })
-    ] }, `${f.device}-${f.mount}`)) }) }) }),
+        m.device,
+        " \xB7 ",
+        m.fstype,
+        ": Netzlaufwerk, Belegung nicht gemessen"
+      ] }, m.mount)) })
+    ] }),
     /* @__PURE__ */ jsxs6(
       Section,
       {
@@ -1355,6 +1372,15 @@ function InfoView({ info, canRestart, busyUnit, onRestart, onTempLimitChanged })
         /* @__PURE__ */ jsx8("td", { "data-label": "Frei", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 sm:whitespace-nowrap opacity-80`, children: formatBytes(d.available) })
       ] }, `${d.device}${d.mount}`)) })
     ] }),
+    info.df_failed && /* @__PURE__ */ jsx8("p", { className: "-mt-4 mb-6 text-sm text-amber-300", "data-testid": "df-timeout", children: dfFailedText(info.df_status) }),
+    (info.network_mounts?.length ?? 0) > 0 && /* @__PURE__ */ jsx8("ul", { className: "-mt-4 mb-6 text-sm opacity-80", "data-testid": "network-mounts", children: info.network_mounts?.map((m) => /* @__PURE__ */ jsxs7("li", { children: [
+      m.mount,
+      " \xB7 ",
+      m.device,
+      " \xB7 ",
+      m.fstype,
+      ": Netzlaufwerk, Belegung nicht gemessen"
+    ] }, m.mount)) }),
     /* @__PURE__ */ jsxs7("div", { className: "grid gap-6 lg:grid-cols-2", children: [
       /* @__PURE__ */ jsxs7("div", { children: [
         /* @__PURE__ */ jsx8("h3", { className: "mb-2 text-sm font-semibold opacity-70", children: "Dienste" }),

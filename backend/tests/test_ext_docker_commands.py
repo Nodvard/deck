@@ -57,6 +57,12 @@ SAME_AS_BEFORE = [
 ]
 
 
+def test_the_image_lists_for_dangling_images_and_full_ids():
+    c = _commands()
+    assert c.dangling_images() == "docker images --filter dangling=true --format '{{json .}}'"
+    assert c.image_names() == "docker images --no-trunc --format '{{json .}}'"
+
+
 @pytest.mark.parametrize(("build", "expected"), SAME_AS_BEFORE)
 def test_the_commands_are_the_same_as_before(build, expected):
     assert build(_commands()) == expected

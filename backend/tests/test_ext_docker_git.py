@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from socketserver import ThreadingMixIn
 from types import SimpleNamespace
+from urllib.parse import quote
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 import pytest
@@ -728,6 +729,12 @@ def test_a_token_goes_to_the_server_and_a_refusal_is_explained(tmp_path, no_prox
     assert seen[0] is None and expected in seen
 
 
+def _location(path, query=None):
+    """Kopfzeilenwert aus Anfragedaten; Zeilenumbrüche werden prozentkodiert."""
+    quoted = quote(path, safe="/%:@")
+    return quoted if query is None else quoted + "?" + quote(query, safe="/%:@=&+,;")
+
+
 def test_redirects_stay_on_the_same_server(tmp_path, no_proxy):
     gf = _gf()
     origin = tmp_path / "origin"
@@ -744,7 +751,7 @@ def test_redirects_stay_on_the_same_server(tmp_path, no_proxy):
         def app(environ, start_response):
             path = environ["PATH_INFO"]
             if path.startswith("/old/"):
-                start_response("301 Moved Permanently", [("Location", path.replace("/old/", "/team/", 1) + "?" + environ.get("QUERY_STRING", ""))])
+                start_response("301 Moved Permanently", [("Location", _location(path.replace("/old/", "/team/", 1), environ.get("QUERY_STRING", "")))])
                 return [b""]
             if path.startswith("/away/"):
                 start_response("302 Found", [("Location", f"{other}/team/stacks/info/refs?service=git-upload-pack")])
@@ -766,10 +773,10 @@ def test_a_redirect_while_fetching_or_without_end_is_refused(tmp_path, no_proxy)
 
     def app(environ, start_response):
         if environ["REQUEST_METHOD"] == "POST":
-            start_response("307 Temporary Redirect", [("Location", environ["PATH_INFO"] + "-neu")])
+            start_response("307 Temporary Redirect", [("Location", _location(environ["PATH_INFO"] + "-neu"))])
             return [b""]
         if environ["PATH_INFO"].startswith("/kreis/"):
-            start_response("302 Found", [("Location", environ["PATH_INFO"] + "?" + environ.get("QUERY_STRING", ""))])
+            start_response("302 Found", [("Location", _location(environ["PATH_INFO"], environ.get("QUERY_STRING", "")))])
             return [b""]
         return inner(environ, start_response)
 

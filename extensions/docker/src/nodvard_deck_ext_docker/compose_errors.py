@@ -13,6 +13,12 @@ _QUOTED_RE = re.compile(r"(?i)unterminated quoted value|in variable name|invalid
 UNSET_VAR_RE = re.compile(r'The \\*"?([^"\\\s]+)\\*"? variable is not set')
 _MARK_RE = re.compile(r"@@(?:step=[a-z]+|rc=-?\d*|warn=[a-z-]+|tail|running|lost|unknown)")
 _MAX_PATH = 512
+# Ohne das Compose-Plugin liest der Docker-Client `compose` und seine Optionen selbst. Erkannt werden nur ganze Zeilen mit den
+# Optionen, die jeder Aufruf des Moduls setzt, und nur mit der Folgezeile des Clients; Compose meldet andere Optionen wortgleich.
+_CLIENT_FLAG_RE = re.compile(r"unknown flag: --ansi|unknown shorthand flag: 'p' in -p")
+_CLIENT_NOT_COMMAND_RE = re.compile(r"docker: 'compose' is not a docker command\.?")
+_CLIENT_NEXT_RE = re.compile(r"See 'docker --help'\.?|Usage:\s+docker \[OPTIONS\] COMMAND.*|Run 'docker --help' for more information")
+COMPOSE_MISSING = "Docker Compose fehlt auf diesem Server. Ohne Compose lassen sich Stacks hier nicht verwalten; es muss nachinstalliert werden."
 
 # Nur diese festen Texte ersetzen den Rest der Meldung; was Compose dort schreibt, geht nie weiter.
 _CONTENT_REASONS = (
@@ -42,12 +48,18 @@ def scrub_compose_output(text: str) -> str:
         return text
     kept: list[str] = []
     hiding = warned = False
-    for line in text.splitlines(keepends=True):
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
         body = line.splitlines()[0]
         if hiding and not _MARK_RE.fullmatch(body):
             continue
         hiding = False
         end = "\n" if len(body) < len(line) else ""
+        if _no_compose_client(lines, index):
+            # Der Satz steht an der Stelle des Treffers, die Hilfe des Clients danach bis zur nächsten Marke fällt weg.
+            kept.append(f"{COMPOSE_MISSING}{end}")
+            hiding = True
+            continue
         read, quoted = _READ_RE.search(body), _QUOTED_RE.search(body)
         # Steht der Grund vor "failed to read", kann alles danach schon zum Wert gehören.
         if quoted is not None and (read is None or quoted.start() < read.start()):
@@ -63,6 +75,17 @@ def scrub_compose_output(text: str) -> str:
         else:
             kept.append(line)
     return "".join(kept)
+
+
+def _no_compose_client(lines: list[str], index: int) -> bool:
+    """Ob Zeile `index` die Meldung des Docker-Clients ohne Compose-Plugin ist (ganze Zeile, bei Optionen mit Folgezeile)."""
+    body = lines[index].strip()
+    if _CLIENT_NOT_COMMAND_RE.fullmatch(body):
+        return True
+    if not _CLIENT_FLAG_RE.fullmatch(body):
+        return False
+    following = next((line.strip() for line in lines[index + 1:] if line.strip()), "")
+    return _CLIENT_NEXT_RE.fullmatch(following) is not None
 
 
 def _read_error(rest: str) -> tuple[str, bool]:

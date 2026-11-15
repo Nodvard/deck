@@ -119,3 +119,23 @@ def test_the_tree_is_read_with_defusedxml_even_if_the_guard_lets_it_through(monk
         check_svg(content)
     # Ohne Entität geht es auch mit der blinden Vorprüfung weiter wie gewohnt.
     check_svg(PLAIN)
+
+
+def _nested(levels: int) -> bytes:
+    return (
+        b'<svg xmlns="http://www.w3.org/2000/svg">' + b"<g>" * levels + b"</g>" * levels + b"</svg>"
+    )
+
+
+def test_deeply_nested_svg_is_rejected_on_upload():
+    with pytest.raises(UnsafeSvg, match="verschachtelt"):
+        check_svg(_nested(5000))
+
+
+def test_nesting_at_the_limit_is_still_accepted():
+    check_svg(_nested(svg_safe.MAX_SVG_DEPTH - 1))
+
+
+def test_nonce_svg_returns_none_for_deep_nesting():
+    assert svg_safe.nonce_svg(_nested(5000), "n" * 43) is None
+    assert svg_safe.nonce_svg(PLAIN, "n" * 43) is not None

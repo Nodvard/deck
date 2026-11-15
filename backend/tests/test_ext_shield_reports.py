@@ -114,7 +114,7 @@ async def test_snapshot_uses_saved_data_and_finding_window(reports, ctx):
     assert row["lynis"] == {"hardening_index": 74, "created_at": (NOW - timedelta(days=2)).timestamp()}
     assert [r["id"] for r in row["findings"]["new"]] == ["at-start", "new"]
     assert {r["id"] for r in row["findings"]["resolved"]} == {"at-start", "done"}
-    assert row["certificates"] is None and "nicht gespeichert" in result["certificates_note"]
+    assert row["certificates"] is None and row["expiring_certificates"] is None and "Außenprüfung" in result["certificates_note"]
     assert result["summary"] == {"updates": 9, "security_updates": 3, "new_findings": 2, "resolved_findings": 2,
                                  "unknown_update_hosts": 0, "unknown_security_update_hosts": 0}
     assert result["period_start"] == (NOW - timedelta(days=7)).timestamp()
@@ -328,3 +328,42 @@ async def test_disabled_job_handler_does_not_generate(reports, ctx):
     ctx.values["weekly_report_enabled"] = False
     assert await reports.WeeklyReports(ctx).run() == {"skipped": True}
     ctx.hosts.list.assert_not_awaited()
+
+
+def _cert(name, days, port=443):
+    return {"hostname": name, "port": port, "status": "ok", "expires_at": NOW.timestamp() + days * 86400, "days_remaining": days}
+
+
+async def test_expiring_certificates_come_from_the_external_check(reports, ctx):
+    from nodvard_deck_ext_shield.models import BaselineRecord
+
+    async with ctx.db.session() as db:
+        db.add(BaselineRecord(id="pi:external", host_id="pi", kind="external", updated_at=NOW,
+                              data={"status": "ok", "certificates": [_cert("fern.example", 200), _cert("bald.example", 9),
+                                                                      _cert("alt.example", -3, 8443)]}))
+    row = (await reports.WeeklyReports(ctx).generate(now=NOW))["hosts"][0]
+    assert [(c["hostname"], c["port"], c["days_remaining"]) for c in row["expiring_certificates"]] == [
+        ("alt.example", 8443, -3), ("bald.example", 443, 9)]
+
+
+async def test_checked_host_without_expiring_certificates_gets_an_empty_list(reports, ctx):
+    from nodvard_deck_ext_shield.models import BaselineRecord
+
+    async with ctx.db.session() as db:
+        db.add(BaselineRecord(id="pi:external", host_id="pi", kind="external", updated_at=NOW,
+                              data={"status": "ok", "certificates": [_cert("fern.example", 200)]}))
+    assert (await reports.WeeklyReports(ctx).generate(now=NOW))["hosts"][0]["expiring_certificates"] == []
+
+
+async def test_days_remaining_count_from_report_time_not_check_time(reports, ctx):
+    from nodvard_deck_ext_shield.models import BaselineRecord
+
+    checked = NOW - timedelta(days=20)
+    stale = {"hostname": "alt.example", "port": 443, "status": "ok", "expires_at": NOW.timestamp() + 15 * 86400,
+             "days_remaining": 35}
+    async with ctx.db.session() as db:
+        db.add(BaselineRecord(id="pi:external", host_id="pi", kind="external", updated_at=checked,
+                              data={"status": "ok", "checked_at": checked.timestamp(), "certificates": [stale]}))
+    row = (await reports.WeeklyReports(ctx).generate(now=NOW))["hosts"][0]
+    assert [(c["hostname"], c["days_remaining"]) for c in row["expiring_certificates"]] == [("alt.example", 15)]
+    assert row["certificates_checked_at"] == checked.timestamp()

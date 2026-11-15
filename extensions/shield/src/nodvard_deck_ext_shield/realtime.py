@@ -100,7 +100,7 @@ class RealtimeReadiness:
 
 
 def _gb(mb: int) -> str:
-    return f"{mb / 1024:.1f} GB".replace(".", ",")
+    return f"{mb / 1024:.1f} GB".replace(".", ",").replace(",0 GB", " GB")
 
 
 def _sections(output: str) -> dict[str, str]:

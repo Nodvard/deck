@@ -560,3 +560,157 @@ async def test_proposal_reason_warns_about_the_lockout(setup):
         assert (await client.post("/defender/hosts/h1/ssh-hardening", json={"mode": "on"})).status_code == 200
     reason = ctx.actions.propose.call_args.args[0].reason
     assert "nur noch mit einem SSH-Schlüssel" in reason and "Konsolenzugang" in reason
+
+
+MARKER = "dummy-geheimnis-aus-der-ausnahme"
+
+
+async def _state(service):
+    app = FastAPI()
+    app.include_router(service.routers()[0])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        return await client.get("/defender/hosts/h1/ssh-hardening")
+
+
+async def test_state_keeps_server_output_out_of_the_answer(setup, ssh_module, caplog):
+    service, session, _ = setup
+
+    async def run(_cmd):
+        return SimpleNamespace(exit_code=1, stdout="", stderr=f"sudo: /etc/shadow: {MARKER}")
+
+    session.run = run
+    with caplog.at_level("WARNING"):
+        response = await _state(service)
+    assert response.status_code == 200
+    assert MARKER not in response.text and "shadow" not in response.text
+    assert response.json()["error"] == "Das SSH-Hilfsskript konnte den Schritt nicht bestätigen. Einzelheiten stehen im Container-Protokoll von Nodvard Deck."
+    assert response.json()["hardened"] is None
+    assert "ssh_hardening_state_failed" in caplog.text and MARKER in caplog.text
+
+
+async def test_state_keeps_foreign_error_text_out_of_the_answer(setup, ssh_module, caplog):
+    service, session, _ = setup
+
+    async def run(_cmd):
+        raise ValueError(f"Traceback (most recent call last): {MARKER}")
+
+    session.run = run
+    with caplog.at_level("WARNING"):
+        response = await _state(service)
+    assert response.status_code == 200
+    assert MARKER not in response.text and "Traceback" not in response.text
+    assert response.json()["error"] == "Der SSH-Zustand ließ sich nicht prüfen. Einzelheiten stehen im Container-Protokoll von Nodvard Deck."
+    assert MARKER in caplog.text
+
+
+async def test_state_still_names_missing_root_rights(setup, ssh_module):
+    service, session, _ = setup
+    av = sys.modules["nodvard_deck_ext_shield.antivirus"]
+
+    async def run(_cmd):
+        return SimpleNamespace(exit_code=126, stdout=f"{av.NO_ROOT}\n{MARKER}\n", stderr=MARKER)
+
+    session.run = run
+    response = await _state(service)
+    assert response.json()["error"] == av.no_root_message(f"{av.NO_ROOT}\n")
+    assert MARKER not in response.text
+
+
+async def test_state_log_line_stays_on_one_line(setup, caplog):
+    service, session, _ = setup
+
+    async def run(_cmd):
+        raise ValueError("eins\nERROR gefälscht\n" + "x" * 5000)
+
+    session.run = run
+    with caplog.at_level("WARNING"):
+        await _state(service)
+    record = next(r for r in caplog.records if "ssh_hardening_state_failed" in r.getMessage())
+    assert "\n" not in record.getMessage() and len(record.getMessage()) < 1300
+
+
+async def test_action_result_keeps_the_server_output(setup):
+    service, session, _ = setup
+    session.fail = "off"
+    result = await service.execute(request(session, "off"))
+    assert not result.success
+    assert result.error == "Das SSH-Hilfsskript konnte den Schritt nicht bestätigen. fehlgeschlagen"
+
+
+MISSING = SimpleNamespace(exit_code=126, stdout="@@noroot\n@@noroot-helper-missing\n", stderr="")
+
+
+def without_helper(session, av):
+    """Der Server hat kein Hilfsskript, bis der Ablegebefehl gelaufen ist."""
+    plain, session.helper = session.run, False
+
+    async def run(cmd):
+        if cmd == av.helper_install_command():
+            session.calls.append("install")
+            session.helper = True
+            return SimpleNamespace(exit_code=0, stdout=av.HELPER_INSTALLED + "\n", stderr="")
+        if cmd.startswith("helper ") and not session.helper:
+            session.calls.append(cmd)
+            return MISSING
+        if cmd == av.helper_inline_command(("ssh-hardening", "status", session.username, *session.public_key.split())):
+            session.calls.append("inline")
+            return SimpleNamespace(exit_code=0, stdout="@@authorized=yes\n@@hardened=no\n", stderr="")
+        return await plain(cmd)
+
+    session.run = run
+
+
+async def test_looking_at_the_state_as_root_installs_nothing(setup, ssh_module):
+    service, session, _ = setup
+    session.username = "root"
+    without_helper(session, ssh_module.av)
+    app = FastAPI()
+    app.include_router(service.routers()[0])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        state = (await client.get("/defender/hosts/h1/ssh-hardening")).json()
+    assert state["authorized"] is True and state["helper_missing"] is True and "error" not in state
+    assert state["warning"] == f"{ssh_module.ROOT_WARNING} {ssh_module.av.HELPER_LATER_NOTE}"
+    assert session.calls == [f"helper status root {KEY}", "inline"]
+
+
+@pytest.mark.parametrize("username", ["root", "deck"])
+async def test_proposing_installs_nothing_and_names_the_helper_for_root(setup, ssh_module, username):
+    service, session, ctx = setup
+    session.username = username
+    without_helper(session, ssh_module.av)
+    app = FastAPI()
+    app.include_router(service.routers()[1])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        for mode in ("add-key", "off") if username == "deck" else ("on", "add-key", "off"):
+            assert (await client.post("/defender/hosts/h1/ssh-hardening", json={"mode": mode})).status_code == 200
+            reason = ctx.actions.propose.call_args.args[0].reason
+            assert reason.endswith(ssh_module.av.HELPER_INSTALL_NOTE) is (username == "root")
+    assert "install" not in session.calls
+
+
+@pytest.mark.parametrize("mode", ["on", "add-key", "off"])
+async def test_approved_change_as_root_installs_the_helper_and_logs_it(setup, ssh_module, mode):
+    service, session, ctx = setup
+    session.username = "root"
+    without_helper(session, ssh_module.av)
+    result = await service.execute(request(session, mode))
+    assert result.success, result.error
+    assert session.calls.count("install") == 1 and "inline" not in session.calls
+    assert ctx.audit.log.await_args.kwargs["detail"] == {"mode": mode, "helper_installed": True}
+
+
+@pytest.mark.parametrize("mode", ["on", "add-key", "off"])
+async def test_approved_change_as_other_user_never_installs(setup, ssh_module, mode):
+    service, session, ctx = setup
+    without_helper(session, ssh_module.av)
+    result = await service.execute(request(session, mode))
+    assert not result.success and result.error == ssh_module.av.HELPER_MISSING_MESSAGE
+    assert len(session.calls) == 1 and session.calls[0].startswith("helper ")
+    assert ctx.audit.log.await_args.kwargs["detail"] == {"mode": mode}
+
+
+async def test_audit_names_the_helper_only_when_it_was_installed(setup, ssh_module):
+    service, session, ctx = setup
+    session.username = "root"
+    assert (await service.execute(request(session, "off"))).success
+    assert ctx.audit.log.await_args.kwargs["detail"] == {"mode": "off"}

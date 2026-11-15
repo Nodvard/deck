@@ -681,7 +681,8 @@ The detail response adds `hosts` and `certificates_note`. Each server has `host_
 | `fail2ban` | `null` without stored state; otherwise `status`, `banned` (number or `null`), `checked_at`, `error` (text or `null`); the last stored current bans, not a weekly total |
 | `lynis` | `null` without a successful score; otherwise `hardening_index` and `created_at` of the latest successful audit |
 | `findings` | `new` and `resolved`, each a list with `id`, `path`, `signature`, `status` |
-| `certificates` | currently `null`, because Shield does not store certificate expiry dates; `certificates_note` explains this limit |
+| `certificates` | always `null` (deprecated) |
+| `expiring_certificates`, `certificates_checked_at` | `null` without an external check; otherwise the certificates from the latest external check that expire within 30 days or have expired (`hostname`, `port`, `expires_at`, `days_remaining` counted from the report time), and the time of that check |
 
 `null` means unknown, not zero findings or zero expiring certificates. `new` contains malware findings detected
 during the period; `resolved` contains findings whose latest status change during the period was to `quarantined`,

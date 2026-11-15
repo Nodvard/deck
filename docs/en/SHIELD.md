@@ -1,6 +1,6 @@
 # Nodvard Shield
 
-## CVE matching and external checks
+## CVE matching and external checks from the home network
 
 The Shield overview has two cards per server. **CVE matching** ("CVE-Abgleich") lists installed packages with
 known vulnerabilities, including installed version, CVE, severity and the fixed version when available.
@@ -26,7 +26,7 @@ published CSAF security advisories. Those advisories do not fully cover unfixed 
 OVAL rules that cannot be evaluated from package inventory and ambiguous product variants are reported as
 check problems. Third party packages and unsupported distribution releases may fall outside the data sources.
 
-**External checks** ("Prüfung von außen") make short TCP connections from Deck to common ports and known
+**External checks** ("Externe Prüfung") make short TCP connections from Deck to common ports and known
 services on the server. The first successful run establishes a baseline. Later runs warn about newly open
 ports. A failed run does not replace the last successful baseline. Checks run from the home network, from the
 machine running Deck, not from the internet. Whether a port is reachable from the internet also depends on the

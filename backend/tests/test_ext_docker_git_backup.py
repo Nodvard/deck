@@ -117,7 +117,7 @@ async def test_with_backup_the_volumes_are_saved_before_anything_is_written(clie
     calls = _server(docker_on, monkeypatch)
     proposed = await _propose(client, docker_on, url, commit)
     action = (await client.get(f"/api/v1/actions/{proposed.json()['action_id']}", headers=docker_on.owner)).json()
-    assert "Vorher sichert Deck die Volumes shop_data (bis zu 2,0 GB); dafür stehen web still" in action["reason"]
+    assert "Vorher sichert Deck die Volumes shop_data (bis zu 2 GB); dafür stehen web still" in action["reason"]
     assert ga.NO_VOLUME_BACKUP not in action["reason"]
     assert action["payload"]["backup"] == {"volumes": ["shop_data"], "services": ["web"]}
     written: list[str] = []
@@ -156,7 +156,7 @@ async def test_volumes_of_stopped_services_are_saved_without_stopping_anything(c
     calls = _server(docker_on, monkeypatch, running=())
     proposed = await _propose(client, docker_on, url, commit)
     action = (await client.get(f"/api/v1/actions/{proposed.json()['action_id']}", headers=docker_on.owner)).json()
-    assert "Vorher sichert Deck die Volumes shop_data (bis zu 2,0 GB). " in action["reason"]
+    assert "Vorher sichert Deck die Volumes shop_data (bis zu 2 GB). " in action["reason"]
     docker_on.exec.config = result(stderr="kaputt\n", code=1)
     error = (await _approve(client, docker_on, proposed))["result"]["error"]
     assert "archive" in calls and not [c for c in calls if c.startswith(("stop", "start"))]
@@ -369,8 +369,8 @@ def test_the_backup_sentence_stays_short():
     ga = _ga()
     many = [f"{'v' * 200}{i}" for i in range(30)]
     text = ga.backup_sentence(many, many, dict.fromkeys(many, GB))
-    assert "und 20 weitere" in text and "v" * 81 not in text and "bis zu 30,0 GB" in text
-    assert ga.backup_sentence(["data"], [], {"data": None}) == "Vorher sichert Deck die Volumes data (bis zu 0,0 GB)."
+    assert "und 20 weitere" in text and "v" * 81 not in text and "bis zu 30 GB" in text
+    assert ga.backup_sentence(["data"], [], {"data": None}) == "Vorher sichert Deck die Volumes data (bis zu 0 GB)."
 
 
 @pytest.mark.asyncio

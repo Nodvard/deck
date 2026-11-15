@@ -250,6 +250,83 @@ async def test_details_show_players_world_and_join_code_over_real_ssh(client, db
     assert [f["key"] for f in profiles[0]["fields"]] == ["service_name", "process_name", "log_path", "world_dir", "backup_dir"]
 
 
+# Antwort echter Debian-Server auf den Status-Befehl: Exit 127, stderr „bash: line 1: powershell: command not found“.
+NO_POWERSHELL = (127, "", "bash: line 1: powershell: command not found\n")
+
+
+def _linux_answers(monkeypatch, command: str) -> None:
+    import conftest
+
+    monkeypatch.setitem(conftest.FAKE_PROBE, command, NO_POWERSHELL)
+
+
+@pytest.mark.asyncio
+async def test_linux_server_gets_a_clear_sentence_instead_of_an_error_id(client, db_session, test_settings, local_ssh_server, monkeypatch):
+    _linux_answers(monkeypatch, get_profile(None).status_command(ServerConfig(profile="valheim-windows")))
+    host, headers = await _setup(client, db_session, test_settings, local_ssh_server)
+
+    body = (await client.get(f"/api/v1/ext/gameserver/servers/{host.id}", headers=headers)).json()
+    assert body["error"] == (
+        "Auf diesem Server gibt es kein PowerShell. Das Profil „Valheim (Windows-Dienst)“ braucht einen Windows-Server, "
+        "ein Profil für Linux gibt es noch nicht."
+    )
+    assert (body["running"], body["service_state"], body["join_code"]) == (False, "unknown", None)
+
+
+@pytest.mark.asyncio
+async def test_other_failures_of_the_status_script_keep_the_error_id(client, db_session, test_settings, local_ssh_server, fake_powershell):
+    fake_powershell["fail"] = "Zugriff verweigert"
+    host, headers = await _setup(client, db_session, test_settings, local_ssh_server)
+
+    body = (await client.get(f"/api/v1/ext/gameserver/servers/{host.id}", headers=headers)).json()
+    assert body["error"].startswith("Die Anfrage ist fehlgeschlagen. Fehlerkennung: ")
+    assert "Zugriff verweigert" not in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_own_join_code_command_runs_although_the_profile_does_not_fit(client, db_session, test_settings, local_ssh_server, monkeypatch):
+    import conftest
+
+    log_command = "cat /srv/spiel/server.log"
+    _linux_answers(monkeypatch, get_profile(None).status_command(ServerConfig(profile="valheim-windows")))
+    monkeypatch.setitem(conftest.FAKE_PROBE, log_command, (0, 'Session "Test" registered with join code 123456\n', ""))
+    host, headers = await _setup(client, db_session, test_settings, local_ssh_server)
+    record = await db_session.get(ExtensionRecord, "gameserver")
+    record.settings = {"log_command": log_command}
+    await db_session.commit()
+
+    body = (await client.get(f"/api/v1/ext/gameserver/servers/{host.id}", headers=headers)).json()
+    assert (body["join_code"], body["join_code_display"]) == ("123456", "Join-Code: 123456")
+    assert body["error"].startswith("Auf diesem Server gibt es kein PowerShell.")
+
+
+@pytest.mark.asyncio
+async def test_own_join_code_command_is_skipped_when_the_server_does_not_answer():
+    import contextlib
+
+    import nodvard_deck_ext_gameserver as ext
+
+    calls: list[str] = []
+
+    class _Exec:
+        def read_access(self, host, timeout_s=None):
+            return contextlib.nullcontext()
+
+        async def run(self, host, command, timeout_s=60):
+            calls.append(command)
+            raise OSError("Verbindung abgelehnt")
+
+    class _Settings:
+        async def get(self):
+            return {"log_command": "cat /srv/spiel/server.log"}
+
+    ctx = type("Ctx", (), {"exec": _Exec(), "settings": _Settings()})()
+    host = type("H", (), {"id": "h1", "status": "up"})()
+    data = await ext.GameServerStatus(ctx).get(host)
+    assert len(calls) == 1
+    assert data["error"].startswith("Die Anfrage ist fehlgeschlagen.") and "join_code" not in data
+
+
 async def _viewer_headers(client, db_session) -> dict:
     from nodvard_deck.core import security
     from nodvard_deck.models import User

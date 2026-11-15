@@ -163,7 +163,10 @@ async def test_cve_check_uses_real_ssh(shield_api, db_session, fake_probe, monke
         0, '@@os\nID=debian\nVERSION_ID=12\nVERSION_CODENAME=bookworm\n@@packages\n'
         'ii \tlibssl3\t3.0.11-1\topenssl\t3.0.11-1\tamd64\n@@end\n', "",
     )
-    data = {"openssl": {"CVE-2026-1001": {"releases": {"bookworm": {"status": "open", "urgency": "high"}}}}}
+    data = {"openssl": {
+        "CVE-2026-1001": {"releases": {"bookworm": {"status": "resolved", "fixed_version": "3.0.13-1~deb12u1", "urgency": "high"}}},
+        "CVE-2026-1002": {"releases": {"bookworm": {"status": "open", "urgency": "high"}}},
+    }}
     download = AsyncMock(return_value=SimpleNamespace(status_code=200, content=json.dumps(data).encode()))
     monkeypatch.setattr(ctx.http, "get", download)
     with pytest.raises(ActionBlocked):
@@ -187,6 +190,8 @@ async def test_cve_check_uses_real_ssh(shield_api, db_session, fake_probe, monke
     assert result["cve"]["status"] == "ok", result
     assert result["cve"]["error"] is None
     assert result["cve"]["counts"] == {"high": 1, "critical": 0}
+    assert [(row["package"], row["cve"]) for row in result["cve"]["findings"]] == [("libssl3", "CVE-2026-1001")]
+    assert result["cve"]["unrated"] == {"no_fix": 1, "unimportant": 0, "undetermined": 0, "foreign": 0}
     download.assert_awaited_once_with(cve.DEBIAN_URL, timeout=60.0, follow_redirects=False)
     with pytest.raises(ActionBlocked):
         await ctx.exec.run(host, cve.inventory_command())

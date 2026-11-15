@@ -65,7 +65,7 @@ describe("Cockpit: Auslastung der Linux-Server", () => {
     expect(within(nas).getByRole("img", { name: "RAM 18 %" })).toBeInTheDocument();
     expect(within(nas).getByRole("img", { name: "Platte 78 %" })).toBeInTheDocument();
     expect(nas.textContent).toContain("717 MB / 3.9 GB");
-    expect(nas.textContent).toContain("1.5 TB / 2.0 TB");
+    expect(nas.textContent).toContain("1.5 TB / 2 TB");
     expect(screen.getByTestId("server-m-nas-uptime").textContent).toMatch(/^62 T/);
     expect(nas).toHaveAttribute("data-state", "live");
     expect(screen.queryByTestId("server-m-nas-note")).toBeNull();

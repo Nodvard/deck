@@ -10,7 +10,7 @@ const SECOND = FIRST - 7 * 86400;
 const SUMMARY = { updates: 3, security_updates: 1, new_findings: 1, resolved_findings: 1, unknown_update_hosts: 1, unknown_security_update_hosts: 1 };
 const metadata = (id = "w1", created_at = FIRST) => ({ id, created_at, period_start: created_at - 7 * 86400, period_end: created_at, host_count: 2, summary: SUMMARY });
 const REPORT = {
-  ...metadata(), certificates_note: "Zertifikatsabläufe sind in Shield noch nicht gespeichert.",
+  ...metadata(), certificates_note: "Zertifikate stammen aus der letzten Außenprüfung des jeweiligen Servers.",
   hosts: [
     {
       host_id: "pi", host_name: "Raspberry Pi", updates: { open: 3, security: 1, checked_at: FIRST - 60, error: null },
@@ -45,6 +45,20 @@ beforeEach(() => {
 });
 
 describe("Wochenberichte", () => {
+  it("zeigt bald ablaufende Zertifikate und den leeren Fall", async () => {
+    const certs = [{ hostname: "bald.example", port: 443, expires_at: FIRST + 9 * 86400, days_remaining: 9 }, { hostname: "alt.example", port: 8443, expires_at: FIRST - 86400, days_remaining: -1 }];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith("/reports")) return json({ items: [metadata()], total: 1 });
+      return json({ ...REPORT, hosts: [{ ...REPORT.hosts[0], certificates: null, expiring_certificates: certs }, { ...REPORT.hosts[1], certificates: null, expiring_certificates: [] }] });
+    }));
+    render(<WeeklyReports />);
+    const pi = within(await screen.findByTestId("report-host-pi"));
+    expect(pi.getByText(/bald\.example:443 · noch 9 Tage/)).toBeInTheDocument();
+    expect(pi.getByText(/alt\.example:8443 · abgelaufen/)).toBeInTheDocument();
+    expect(within(screen.getByTestId("report-host-empty")).getByText("Keine in den nächsten 30 Tagen")).toBeInTheDocument();
+  });
+
   it("zeigt gespeicherte Werte, Funde und unbekannte Daten ohne falsche Entwarnung", async () => {
     render(<WeeklyReports />);
     const pi = within(await screen.findByTestId("report-host-pi"));

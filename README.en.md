@@ -90,7 +90,7 @@ The screenshots show sample data (the interface is in German for now).
 
 | Extension | What it does |
 |---|---|
-| Game servers (beta) | Start/stop game servers and show the current join code (e.g. Valheim) |
+| Game servers (beta) | Start/stop game servers and show the current join code (so far only Valheim as a Windows service) |
 | Documents | Document archive with OCR and full-text search |
 | Inventory | Devices and items with purchase data and warranty reminders |
 | Nextcloud | Nextcloud as a source in the file manager, plus a tile with version, updates, free space, active users and load |

@@ -26,6 +26,8 @@ interface ReportHost {
   lynis: { hardening_index: number; created_at: number } | null;
   findings: { new: ReportFinding[]; resolved: ReportFinding[] };
   certificates: null;
+  certificates_checked_at?: number | null;
+  expiring_certificates?: { hostname: string; port: number; expires_at: number; days_remaining: number }[] | null;
 }
 interface Report extends ReportSummary { hosts: ReportHost[]; certificates_note: string }
 
@@ -75,7 +77,18 @@ function HostReport({ host: h }: { host: ReportHost }) {
             <dd>{h.lynis ? `${h.lynis.hardening_index} / 100` : "Noch kein erfolgreicher Härtungstest"}</dd>
             {h.lynis && <dd className="text-xs text-white/50">Stand: {when(h.lynis.created_at)}</dd>}
           </div>
-          <div><dt>Bald ablaufende Zertifikate</dt><dd>Keine gespeicherten Zertifikatsdaten</dd></div>
+          <div>
+            <dt>Bald ablaufende Zertifikate</dt>
+            {(h.expiring_certificates ?? null) === null && <dd>Keine gespeicherten Zertifikatsdaten</dd>}
+            {h.expiring_certificates?.length === 0 && <dd>Keine in den nächsten 30 Tagen</dd>}
+            {h.expiring_certificates && h.certificates_checked_at && <dd className="text-xs text-white/50">Stand der Außenprüfung: {when(h.certificates_checked_at)}</dd>}
+            {h.expiring_certificates?.map((c) => (
+              <dd key={`${c.hostname}:${c.port}`}>
+                {c.hostname}:{c.port} · {c.days_remaining < 0 ? "abgelaufen" : `noch ${c.days_remaining} Tage`}
+                <span className="text-xs text-white/50"> (bis {date(c.expires_at)})</span>
+              </dd>
+            ))}
+          </div>
         </dl>
         <div className="mt-5 grid gap-4 border-t border-white/[0.06] pt-4 sm:grid-cols-2">
           <Findings title="Neue Funde" rows={h.findings.new} />

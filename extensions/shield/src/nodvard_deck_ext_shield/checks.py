@@ -37,12 +37,20 @@ class CveCounts(BaseModel):
     critical: int
 
 
+class CveUnrated(BaseModel):
+    no_fix: int
+    unimportant: int
+    undetermined: int
+    foreign: int = 0
+
+
 class CveResult(BaseModel):
     status: Literal["ok", "error", "unsupported"]
     checked_at: float
     findings: list[CveFinding]
     counts: CveCounts
     error: str | None
+    unrated: CveUnrated | None = None
 
 
 class CertificateOut(BaseModel):

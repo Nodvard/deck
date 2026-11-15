@@ -173,6 +173,8 @@ def decode_jwt(token: str, *, secret: str, expected_type: TokenType) -> dict[str
         payload = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
     except jwt.PyJWTError as exc:
         raise TokenError(str(exc)) from exc
+    except UnicodeEncodeError:
+        raise TokenError("Token ist nicht lesbar.") from None
 
     if payload.get("typ") != expected_type:
         raise TokenError(f"Token-Typ '{payload.get('typ')}' erwartet: '{expected_type}'")

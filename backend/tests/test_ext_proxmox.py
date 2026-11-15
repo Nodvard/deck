@@ -2757,6 +2757,11 @@ def test_disk_assessment_order_smart_then_wear_then_temperature():
     assert disk_assessment("PASSED", 80, 58, 55) == ("58 °C", "warn") and disk_assessment("PASSED", 80, 58, 60)[1] == "good"
     assert disk_assessment("OK", None, None) == ("gesund", "good")
     assert disk_assessment(None, None, None) == ("unbekannt", "neutral")
+    # Kann Proxmox SMART nicht lesen (USB, RAID-Controller, virtuelle Platte), meldet es "UNKNOWN": kein Defekt.
+    assert disk_assessment("UNKNOWN", None, None) == ("unbekannt", "neutral")
+    assert disk_assessment("unknown", 80, 40) == ("unbekannt", "neutral")
+    assert disk_assessment("UNKNOWN", 5, 40) == ("5 % Rest", "danger")
+    assert disk_assessment("UNKNOWN", 80, 72) == ("72 °C", "warn")
     assert smart_details({"attributes": [{"name": "Airflow_Temperature_Cel", "raw": "41"}]}) == {"temperature_c": 41, "power_on_hours": None}
 
 
@@ -2806,6 +2811,61 @@ async def test_watch_reports_a_failing_disk_once_and_its_recovery_once(client, d
         ("critical", "Datenträger auf pve1: SMART: FAILED"),
         ("info", "Datenträger auf pve1 wieder unauffällig"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_watch_stays_silent_for_a_disk_without_smart_answer(client, db_session, test_settings, mock_proxmox):
+    base_url, state = mock_proxmox
+    token = await _setup_proxmox(client, db_session, test_settings, base_url)
+    state["disks"][1].update(health="UNKNOWN", type="usb")
+    del state["smart"]["/dev/sda"]
+
+    assert (await _run_watch())["notified"] == 0
+    assert (await _run_watch())["notified"] == 0
+    assert await _watch_notifications(db_session) == []
+    rows = (await client.get("/api/v1/ext/proxmox/widgets/disks", headers=_auth_header(token))).json()["data"]
+    assert [(r["model"], r["badge"], r["tone"]) for r in rows] == [
+        ("Example SATA SSD 128GB", "unbekannt", "neutral"),
+        ("Example NVMe 1TB", "gesund", "good"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_watch_keeps_a_disk_alert_while_smart_is_unreadable(client, db_session, test_settings, mock_proxmox):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    failed = ("critical", "Datenträger auf pve1: SMART: FAILED")
+
+    state["disks"][1]["health"] = "FAILED"
+    assert (await _run_watch())["notified"] == 1
+    state["disks"][1]["health"] = "UNKNOWN"
+    assert (await _run_watch())["notified"] == 0
+    assert (await _run_watch())["notified"] == 0
+    assert await _watch_notifications(db_session) == [failed], "keine Entwarnung, nur weil die Auskunft fehlt"
+    state["disks"][1]["health"] = "FAILED"
+    assert (await _run_watch())["notified"] == 0, "derselbe Defekt wird nicht ein zweites Mal gemeldet"
+    state["disks"][1]["health"] = "UNKNOWN"
+    assert (await _run_watch())["notified"] == 0
+    state["disks"][1]["health"] = "PASSED"
+    assert (await _run_watch())["notified"] == 1
+
+    assert await _watch_notifications(db_session) == [failed, ("info", "Datenträger auf pve1 wieder unauffällig")]
+
+
+@pytest.mark.asyncio
+async def test_watch_reports_a_disk_that_fails_after_an_unreadable_smart_answer(
+    client, db_session, test_settings, mock_proxmox
+):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+
+    state["disks"][1]["health"] = "UNKNOWN"
+    assert (await _run_watch())["notified"] == 0
+    assert await _watch_notifications(db_session) == []
+    state["disks"][1]["health"] = "FAILED"
+    assert (await _run_watch())["notified"] == 1
+
+    assert await _watch_notifications(db_session) == [("critical", "Datenträger auf pve1: SMART: FAILED")]
 
 
 @pytest.mark.asyncio

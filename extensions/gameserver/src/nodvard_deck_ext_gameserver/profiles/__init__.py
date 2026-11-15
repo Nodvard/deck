@@ -42,6 +42,10 @@ class GameProfile(Protocol):
         """`action` in {"start", "stop", "restart", "backup"}."""
         ...
 
+    def explain_failure(self, exit_code: int) -> str | None:
+        """Klartext, wenn der Status-Befehl auf diesem Server gar nicht laufen kann; sonst `None`."""
+        ...
+
 
 def _registry() -> dict[str, GameProfile]:
     from .valheim import ValheimWindowsProfile

@@ -289,6 +289,12 @@ deines Proxys (Abschnitt 6).
   Netzes hinweg weiter nach links.
 - Das Anmelde-Cookie bekommt `Secure` automatisch, sobald die Anfrage über HTTPS kam. Die Umgebungsvariable
   `NODVARD_DECK_COOKIE_SECURE` (`true`/`false`) erzwingt es weiter, falls du das brauchst.
+- Über HTTPS schickt Nodvard Deck `Strict-Transport-Security` mit. Der Browser merkt sich das ein Jahr lang für den
+  Rechnernamen, egal mit welchem Port. Laufen unter demselben Namen noch andere Dienste nur über http (zum Beispiel
+  Deck unter `https://name:8443` und ein anderer Dienst unter `http://name:8081`), erreicht der Browser sie danach
+  nicht mehr. Die Umgebungsvariable `NODVARD_DECK_HSTS=false` schaltet die Kopfzeile ab; Standard ist an. Was der
+  Browser sich schon gemerkt hat, bleibt bis zum Ablauf oder bis du es dort für die Seite löschst.
+  Der Schalter gilt auch für die Notseite, die nach einem gescheiterten Start statt der Oberfläche läuft.
 - Das Image startet uvicorn mit `--no-proxy-headers`. Hast du früher `FORWARDED_ALLOW_IPS` gesetzt, wirkt das nicht
   mehr. Trag die Adresse deines Proxys stattdessen unter Einstellungen → System → Vertrauenswürdiger Proxy ein
   (Abschnitt 4). Startest du den Container mit einem eigenen `command:`, nimm `--no-proxy-headers` mit, sonst wertet

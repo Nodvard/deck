@@ -4,7 +4,7 @@ Im Reiter **Einbruchschutz** bietet jede Serverkarte **SSH härten** an. Der Dec
 
 Fehlt der öffentliche Deck-Schlüssel in `authorized_keys` des Zugangsnutzers, trägt **Deck-Schlüssel eintragen** ihn als eigene Aktion ein. Vorhandene Schlüssel bleiben erhalten. Beide Schritte und **Härtung zurücknehmen** laufen mit hohem Risiko durch das Aktions-Gate und erscheinen im Audit-Protokoll.
 
-Die Härtung benötigt das aktuelle Shield-Hilfsskript ab Version 26. Fehlt es, den Server über seinen Einrichtungsbefehl erneut einrichten. Die einzige geänderte SSH-Konfigurationsdatei ist `/etc/ssh/sshd_config.d/nodvard-haertung.conf`:
+Die Härtung benötigt das aktuelle Shield-Hilfsskript ab Version 26. Fehlt es, den Server über seinen Einrichtungsbefehl erneut einrichten. Ist Deck dort als root angemeldet, zeigt es den Zustand auch ohne Skript an und legt nichts ab. Das Skript kommt erst mit der ersten freigegebenen Änderung (SSH härten, Schlüssel eintragen, Zurücknehmen, Fail2ban-Einstellungen) auf den Server; die Freigabe nennt das, und das Audit-Protokoll hält es fest. Die einzige geänderte SSH-Konfigurationsdatei ist `/etc/ssh/sshd_config.d/nodvard-haertung.conf`:
 
 ```text
 PasswordAuthentication no

@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, Header, Request
+from fastapi.responses import JSONResponse
 from local_server_helpers import serve_app
 from raw_http_helpers import BROKEN_ANSWERS, REDIRECT_ANSWERS, raw_http_server
 
@@ -24,6 +25,16 @@ from nodvard_deck.ext.context import build_context
 from nodvard_deck.ext.runtime import ExtensionRuntime, LoadedExtension
 
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
+
+# Antwort von ntfy 2.38 auf `GET /<thema>/auth` und auf das Senden ohne Recht am Thema.
+WRITE_ONLY_NOTE = (
+    "Der ntfy-Server ist erreichbar und das Thema wird angenommen. Ob Senden erlaubt ist, lässt sich ohne echte "
+    "Nachricht nicht prüfen: Das zeigt „Testnachricht senden“."
+)
+TOKEN_REJECTED_TEXT = (
+    "ntfy hat das Zugriffstoken abgelehnt (HTTP 401). Prüfe das Token in den Einstellungen, es ist falsch oder abgelaufen."
+)
+NO_ACCESS = {"code": 40301, "http": 403, "error": "forbidden", "link": "https://ntfy.sh/docs/publish/#authentication"}
 
 
 @pytest.fixture(autouse=True)
@@ -89,6 +100,18 @@ async def fake_ntfy_server():
     @app.get("/v1/health")
     async def health():
         return {"healthy": healthy["value"]}
+
+    @app.get("/{topic}/auth")
+    async def topic_auth(topic: str):
+        if healthy.get("auth", 200) == 200:
+            return {"success": True}
+        return JSONResponse(NO_ACCESS, status_code=healthy["auth"])
+
+    @app.get("/v1/account")
+    async def account():
+        if healthy.get("account", 200) == 200:
+            return {"username": "deck", "role": "user"}
+        return JSONResponse({"code": 40101, "http": 401, "error": "unauthorized"}, status_code=401)
 
     async with serve_app(app) as server_url:
         yield server_url, received, healthy
@@ -166,7 +189,7 @@ async def test_connection_test_reads_the_current_token(fake_ntfy_server, db_sess
 
     def answer(request):
         seen.append(request.headers.get("authorization"))
-        assert request.method == "GET" and request.url.path == "/v1/health"
+        assert request.method == "GET" and request.url.path in ("/v1/health", "/test-topic/auth")
         return httpx.Response(200 if seen[-1] == expected else 401)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
@@ -180,7 +203,7 @@ async def test_connection_test_reads_the_current_token(fake_ntfy_server, db_sess
         assert (await channel.test()).ok is True
         await ctx.secrets.delete("ntfy-token")
         assert (await channel.test()).ok is False
-    assert seen == ["Bearer erstes-token", "Bearer falsch", "Bearer zweites-token", None]
+    assert seen == ["Bearer erstes-token"] * 2 + ["Bearer falsch"] + ["Bearer zweites-token"] * 2 + [None]
 
 
 @pytest.mark.asyncio
@@ -422,6 +445,133 @@ async def test_test_reports_error_statuses_as_not_ok(scripted_ntfy_server, db_se
     result = await channel.test()
     assert result.ok is False
     assert f"HTTP {code}" in result.message and "127.0.0.1" not in result.message
+
+
+@pytest.mark.asyncio
+async def test_test_asks_for_the_topic_after_the_server(scripted_ntfy_server, db_session, tmp_path, test_settings):
+    server_url, script = scripted_ntfy_server
+    script.update(status=200)
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+    assert (await channel.test()).ok is True
+    assert script["calls"] == ["GET /v1/health", "GET /test-topic/auth"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [401, 403])
+@pytest.mark.parametrize("with_token", [True, False])
+async def test_test_stays_green_when_only_reading_is_refused(
+    fake_ntfy_server, db_session, tmp_path, test_settings, code, with_token
+):
+    """Ein Token nur mit Schreibrecht (oder ein Server mit Standardzugriff write-only) darf nicht rot werden."""
+    from nodvard_sdk.capabilities import NotificationChannel
+
+    server_url, received, answers = fake_ntfy_server
+    answers["auth"] = code
+    runtime, ctx, _ext = await _setup_ntfy_extension(db_session, tmp_path, test_settings, server_url=server_url)
+    if with_token:
+        await ctx.secrets.create(label="ntfy-token", kind="generic", value="nur-schreiben")
+
+    result = await runtime.capabilities.query(NotificationChannel)[0].test()
+
+    assert result.ok is True
+    assert result.message == WRITE_ONLY_NOTE and "Testnachricht senden" in result.message
+    assert received == []
+
+
+@pytest.mark.asyncio
+async def test_test_is_green_with_read_access(fake_ntfy_server, db_session, tmp_path, test_settings):
+    server_url, received, _answers = fake_ntfy_server
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+    assert (await channel.test()).ok is True
+    assert received == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [401, 403])
+async def test_test_is_red_for_a_rejected_token(fake_ntfy_server, db_session, tmp_path, test_settings, code):
+    from nodvard_sdk.capabilities import NotificationChannel
+
+    server_url, received, answers = fake_ntfy_server
+    answers.update(auth=code, account=401)
+    runtime, ctx, _ext = await _setup_ntfy_extension(db_session, tmp_path, test_settings, server_url=server_url)
+    await ctx.secrets.create(label="ntfy-token", kind="generic", value="falsches-token")
+
+    result = await runtime.capabilities.query(NotificationChannel)[0].test()
+
+    assert result.ok is False and result.message == TOKEN_REJECTED_TEXT
+    assert "falsches-token" not in result.message and received == []
+
+
+@pytest.mark.asyncio
+async def test_test_is_red_when_the_server_is_not_reachable(db_session, tmp_path, test_settings):
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, "http://127.0.0.1:9")
+    result = await channel.test()
+    assert result.ok is False and "127.0.0.1" not in (result.message or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [400, 404])
+async def test_test_is_not_ok_for_a_topic_the_server_does_not_know(fake_ntfy_server, db_session, tmp_path, test_settings, code):
+    server_url, _received, answers = fake_ntfy_server
+    answers["auth"] = code
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+    result = await channel.test()
+    assert result.ok is False
+    assert f"(HTTP {code})" in result.message and "anderes Thema" in result.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("topic", ["deck alarme", "deck-älarme", "deck.alarme", "deck/alarme", "a" * 65])
+async def test_test_rejects_a_topic_name_ntfy_never_accepts(scripted_ntfy_server, db_session, tmp_path, test_settings, topic):
+    server_url, script = scripted_ntfy_server
+    script.update(status=200)
+    _runtime, _ctx, _ext = await _setup_ntfy_extension(db_session, tmp_path, test_settings, server_url=server_url, topic=topic)
+    from nodvard_sdk.capabilities import NotificationChannel
+
+    result = await _runtime.capabilities.query(NotificationChannel)[0].test()
+
+    assert result.ok is False
+    assert result.message.startswith("Dieses Thema nimmt ntfy nicht an.")
+    assert script["calls"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("topic", ["deck-alarme", "Deck_Alarme_2", "a" * 64])
+async def test_test_accepts_every_valid_topic_name(scripted_ntfy_server, db_session, tmp_path, test_settings, topic):
+    server_url, script = scripted_ntfy_server
+    script.update(status=200)
+    _runtime, _ctx, _ext = await _setup_ntfy_extension(db_session, tmp_path, test_settings, server_url=server_url, topic=topic)
+    from nodvard_sdk.capabilities import NotificationChannel
+
+    assert (await _runtime.capabilities.query(NotificationChannel)[0].test()).ok is True
+    assert script["calls"][-1] == f"GET /{topic}/auth"
+
+
+@pytest.mark.asyncio
+async def test_connection_test_of_the_settings_page_shows_the_topic_result_unchanged(
+    fake_ntfy_server, db_session, tmp_path, test_settings
+):
+    from nodvard_deck.services.extension_test import run_connection_test
+
+    server_url, _received, answers = fake_ntfy_server
+    answers["auth"] = 403
+    runtime, ctx, extension = await _setup_ntfy_extension(db_session, tmp_path, test_settings, server_url=server_url)
+    from nodvard_sdk.capabilities import NotificationChannel
+
+    channel = runtime.capabilities.query(NotificationChannel)[0]
+    loaded = SimpleNamespace(instance=extension, ctx=ctx)
+
+    outcome = await run_connection_test(loaded, settings=await ctx.settings.get(), schema=None, secrets=[], channel=channel)
+
+    assert outcome.ok is True and outcome.details[0].message == WRITE_ONLY_NOTE
+
+    answers["auth"] = 404
+    outcome = await run_connection_test(loaded, settings=await ctx.settings.get(), schema=None, secrets=[], channel=channel)
+    assert outcome.ok is False and outcome.message.startswith("Der ntfy-Server ist erreichbar, kennt das Thema aber so nicht (HTTP 404).")
+
+    answers["auth"] = 200
+    outcome = await run_connection_test(loaded, settings=await ctx.settings.get(), schema=None, secrets=[], channel=channel)
+    assert outcome.ok is True and outcome.message == "Verbindung funktioniert."
 
 
 @pytest.mark.asyncio

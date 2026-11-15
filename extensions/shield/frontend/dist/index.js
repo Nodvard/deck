@@ -1928,21 +1928,30 @@ function CveResults({ check }) {
           " hoch"
         ] })
       ] }),
-      check.findings.length === 0 ? /* @__PURE__ */ jsx10("p", { className: "text-sm text-white/55", children: "Keine bekannten Sicherheitsl\xFCcken im gepr\xFCften Paketbestand gefunden." }) : /* @__PURE__ */ jsx10("ul", { className: "divide-y divide-white/[0.06]", children: check.findings.map((finding) => {
-        const severity = SEVERITIES[finding.severity.toLowerCase()] ?? { label: "Unbekannt", tone: "neutral" };
-        return /* @__PURE__ */ jsxs9("li", { className: "py-2 text-sm", children: [
-          /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap items-center gap-2", children: [
-            /* @__PURE__ */ jsx10("strong", { className: "break-all font-medium", children: finding.package }),
-            /* @__PURE__ */ jsx10(Badge, { tone: severity.tone, children: severity.label })
-          ] }),
-          /* @__PURE__ */ jsx10("p", { className: "mt-1 break-all", children: finding.cve }),
-          /* @__PURE__ */ jsxs9("p", { className: "mt-1 break-all text-xs text-white/55", children: [
-            "Installiert: ",
-            finding.installed_version
-          ] }),
-          /* @__PURE__ */ jsx10("p", { className: "break-all text-xs text-white/55", children: finding.fixed_version ? `Behoben ab: ${finding.fixed_version}` : "Noch keine behobene Version bekannt." })
-        ] }, `${finding.package}:${finding.installed_version}:${finding.cve}`);
-      }) })
+      check.findings.length === 0 ? /* @__PURE__ */ jsx10("p", { className: "text-sm text-white/55", children: "Keine L\xFCcken, f\xFCr die es eine Korrektur gibt." }) : /* @__PURE__ */ jsxs9(Fragment5, { children: [
+        check.findings.some((finding) => finding.fixed_version) && /* @__PURE__ */ jsx10("p", { className: "mb-2 text-xs text-white/50", children: "F\xFCr Funde mit Korrekturversion gilt: Es gibt beim Hersteller der Distribution eine Korrektur, installiert ist eine \xE4ltere Version: aktualisieren oder, bei Altpaketen ohne Quelle, entfernen." }),
+        /* @__PURE__ */ jsx10("ul", { className: "divide-y divide-white/[0.06]", children: check.findings.map((finding) => {
+          const severity = SEVERITIES[finding.severity.toLowerCase()] ?? { label: "Unbekannt", tone: "neutral" };
+          return /* @__PURE__ */ jsxs9("li", { className: "py-2 text-sm", children: [
+            /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap items-center gap-2", children: [
+              /* @__PURE__ */ jsx10("strong", { className: "break-all font-medium", children: finding.package }),
+              /* @__PURE__ */ jsx10(Badge, { tone: severity.tone, children: severity.label })
+            ] }),
+            /* @__PURE__ */ jsx10("p", { className: "mt-1 break-all", children: finding.cve }),
+            /* @__PURE__ */ jsxs9("p", { className: "mt-1 break-all text-xs text-white/55", children: [
+              "Installiert: ",
+              finding.installed_version
+            ] }),
+            /* @__PURE__ */ jsx10("p", { className: "break-all text-xs text-white/55", children: finding.fixed_version ? `Behoben ab: ${finding.fixed_version}` : "Noch keine behobene Version bekannt." })
+          ] }, `${finding.package}:${finding.installed_version}:${finding.cve}`);
+        }) })
+      ] })
+    ] }),
+    complete && check.unrated && (check.unrated.no_fix > 0 || check.unrated.undetermined > 0 || (check.unrated.foreign ?? 0) > 0) && /* @__PURE__ */ jsxs9("p", { className: "mt-3 text-xs text-white/50", children: [
+      "Nicht gemeldet:",
+      check.unrated.no_fix > 0 ? ` ${check.unrated.no_fix} L\xFCcken ohne verf\xFCgbare Korrektur${check.unrated.unimportant > 0 ? ` (davon ${check.unrated.unimportant} von Debian als unbedeutend eingestuft)` : ""}.` : "",
+      check.unrated.undetermined > 0 ? ` ${check.unrated.undetermined} L\xFCcken noch nicht bewertet.` : "",
+      (check.unrated.foreign ?? 0) > 0 ? ` ${check.unrated.foreign} L\xFCcken bei Paketen, die nicht aus Debian stammen (nicht bewertbar).` : ""
     ] }),
     /* @__PURE__ */ jsx10(CheckedAt, { value: check.checked_at })
   ] });
@@ -2852,7 +2861,24 @@ function HostReport({ host: h }) {
       ] }),
       /* @__PURE__ */ jsxs13("div", { children: [
         /* @__PURE__ */ jsx14("dt", { children: "Bald ablaufende Zertifikate" }),
-        /* @__PURE__ */ jsx14("dd", { children: "Keine gespeicherten Zertifikatsdaten" })
+        (h.expiring_certificates ?? null) === null && /* @__PURE__ */ jsx14("dd", { children: "Keine gespeicherten Zertifikatsdaten" }),
+        h.expiring_certificates?.length === 0 && /* @__PURE__ */ jsx14("dd", { children: "Keine in den n\xE4chsten 30 Tagen" }),
+        h.expiring_certificates && h.certificates_checked_at && /* @__PURE__ */ jsxs13("dd", { className: "text-xs text-white/50", children: [
+          "Stand der Au\xDFenpr\xFCfung: ",
+          when(h.certificates_checked_at)
+        ] }),
+        h.expiring_certificates?.map((c) => /* @__PURE__ */ jsxs13("dd", { children: [
+          c.hostname,
+          ":",
+          c.port,
+          " \xB7 ",
+          c.days_remaining < 0 ? "abgelaufen" : `noch ${c.days_remaining} Tage`,
+          /* @__PURE__ */ jsxs13("span", { className: "text-xs text-white/50", children: [
+            " (bis ",
+            date(c.expires_at),
+            ")"
+          ] })
+        ] }, `${c.hostname}:${c.port}`))
       ] })
     ] }),
     /* @__PURE__ */ jsxs13("div", { className: "mt-5 grid gap-4 border-t border-white/[0.06] pt-4 sm:grid-cols-2", children: [

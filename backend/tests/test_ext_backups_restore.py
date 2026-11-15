@@ -2328,3 +2328,12 @@ async def test_a_number_that_is_used_again_gets_its_message_even_when_the_old_no
     assert (await executor.execute(_request(QEMU_PAYLOAD))).success
     assert _titles(executor) == ["Kopie fertig eingerichtet: VM 900 „web-kopie“"] * 2  # die neue Kopie meldet sich wieder
     assert _pending(tmp_path) == {} and restore.pending.ANNOUNCED == {}
+
+
+def test_gb_ganze_werte_ohne_nachkommastelle(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "extensions" / "backups" / "src"))
+    from nodvard_deck_ext_backups import restore
+
+    assert restore.gb(5 * 1024**3) == "5 GB"
+    assert restore.gb(6.4 * 1024**3) == "6.4 GB"
+    assert restore.gb(34 * 1024**3) == "34 GB"

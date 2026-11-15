@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -29,7 +30,8 @@ if TYPE_CHECKING:
 
 DEFAULT_CRON = "0 8 * * 1"
 RETENTION = timedelta(weeks=12)
-CERTIFICATES_NOTE = "Zertifikatsabläufe sind in Shield noch nicht gespeichert."
+EXPIRY_DAYS = 30
+CERTIFICATES_NOTE = "Zertifikate stammen aus der letzten Außenprüfung des jeweiligen Servers."
 
 
 class ReportSummary(BaseModel):
@@ -80,6 +82,13 @@ class ReportFindings(BaseModel):
     resolved: list[ReportFinding]
 
 
+class ReportCertificate(BaseModel):
+    hostname: str
+    port: int
+    expires_at: float
+    days_remaining: float
+
+
 class ReportHost(BaseModel):
     host_id: str
     host_name: str
@@ -89,6 +98,8 @@ class ReportHost(BaseModel):
     lynis: ReportLynis | None
     findings: ReportFindings
     certificates: None
+    expiring_certificates: list[ReportCertificate] | None = None
+    certificates_checked_at: float | None = None
 
 
 class WeeklyReportMeta(BaseModel):
@@ -118,6 +129,23 @@ def _updates(row: BaselineRecord | None) -> dict | None:
         return None
     return {"open": data["count"], "security": data.get("security_count"),
             "checked_at": data.get("checked_at") or _ts(row.updated_at), "error": data.get("error")}
+
+
+def _certificates(row: BaselineRecord | None, now: datetime) -> dict | None:
+    """Zertifikate der letzten Außenprüfung, die bis `EXPIRY_DAYS` nach `now` ablaufen oder abgelaufen sind, mit Restlaufzeit
+    ab `now`; `None` ohne Prüfung."""
+    if row is None or not isinstance(row.data.get("certificates"), list):
+        return None
+    soon = []
+    for c in row.data["certificates"]:
+        if not (isinstance(c, dict) and isinstance(c.get("hostname"), str) and isinstance(c.get("port"), int)
+                and isinstance(c.get("expires_at"), (int, float))):
+            continue
+        days = math.floor((c["expires_at"] - now.timestamp()) / 86400)
+        if days <= EXPIRY_DAYS:
+            soon.append({"hostname": c["hostname"], "port": c["port"], "expires_at": c["expires_at"], "days_remaining": days})
+    soon.sort(key=lambda c: (c["expires_at"], c["hostname"], c["port"]))
+    return {"checked_at": row.data.get("checked_at") or _ts(row.updated_at), "items": soon}
 
 
 def _fail2ban(row: BaselineRecord | None) -> dict | None:
@@ -172,7 +200,7 @@ class WeeklyReports:
         ids = [h.id for h in hosts]
         async with self._ctx.db.session() as db:
             baselines = {(r.host_id, r.kind): r for r in (await db.scalars(
-                select(BaselineRecord).where(BaselineRecord.host_id.in_(ids), BaselineRecord.kind.in_(("updates", "guard")))
+                select(BaselineRecord).where(BaselineRecord.host_id.in_(ids), BaselineRecord.kind.in_(("updates", "guard", "external")))
             )).all()}
             scans = (await db.scalars(select(ScanRecord).where(ScanRecord.host_id.in_(ids), ScanRecord.status != "running")
                                      .order_by(ScanRecord.started_at.desc()))).all()
@@ -183,6 +211,7 @@ class WeeklyReports:
                                         .order_by(FindingRecord.detected_at, FindingRecord.id))).all()
         rows = []
         for host in hosts:
+            certs = _certificates(baselines.get((host.id, "external")), now)
             scan = next((r for r in scans if r.host_id == host.id), None)
             audit = next((r for r in audits if r.host_id == host.id), None)
             found = [r for r in findings if r.host_id == host.id]
@@ -199,6 +228,8 @@ class WeeklyReports:
                                  and r.status_changed_at is not None and start <= r.status_changed_at < now],
                 },
                 "certificates": None,
+                "expiring_certificates": certs["items"] if certs else None,
+                "certificates_checked_at": certs["checked_at"] if certs else None,
             })
         summary = {
             "updates": sum(r["updates"]["open"] for r in rows if r["updates"]),

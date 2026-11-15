@@ -417,6 +417,28 @@ async def test_a_failing_channel_does_not_stop_the_others_and_the_test_message_n
 
 
 @pytest.mark.asyncio
+async def test_ntfy_topic_result_is_named_next_to_the_other_channels(
+    fake_ntfy_server, fake_services, db_session, tmp_path, test_settings,  # noqa: F811 -- Fixture
+):
+    ntfy_url, _received, answers = fake_ntfy_server
+    host, _, _answer = fake_services
+    answers["auth"] = 403
+    _channel, ctx, extension = await _extension(db_session, tmp_path, test_settings, {
+        "server_url": ntfy_url, "topic": "deck-alarme", "channels": [{"name": "gotify"}],
+    }, {"push-kanal:gotify": f"gotify://{host}/AppToken123"})
+
+    report = await extension.health(ctx)
+
+    assert report.healthy is True and report.details["gotify"]["healthy"] is True
+    assert report.details["ntfy"]["healthy"] is True and "Testnachricht senden" in report.details["ntfy"]["note"]
+
+    answers["auth"] = 404
+    report = await extension.health(ctx)
+    assert report.healthy is False and report.details["ntfy"]["verbatim"] is True
+    assert "kennt das Thema aber so nicht (HTTP 404)" in report.details["ntfy"]["error"]
+
+
+@pytest.mark.asyncio
 async def test_a_replaced_channel_address_is_used_for_the_next_message(fake_services, db_session, tmp_path, test_settings):
     host, received, _answer = fake_services
     channel, ctx, _ext = await _extension(db_session, tmp_path, test_settings, {

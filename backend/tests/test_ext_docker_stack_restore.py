@@ -611,7 +611,7 @@ def _started(env):
     ((3, "", "gzip: unexpected end of file\n"), "Das Archiv von shop_data ist beschädigt oder unvollständig (gzip: unexpected end of file)."),
     ((5, "", ""), "Im Volume shop_data liegt noch .nodvard-vorher von einem früheren Zurückspielen"),
     ((0, f"{5 * 1024 ** 3} 1048576 {SHA} {SIZE}\n", ""), ("Für shop_data ist zu wenig Platz: Deck entpackt die Sicherung erst neben die "
-                                                           "alten Daten und braucht dafür bis zu 5,2 GB, frei sind 1,0 GB.")),
+                                                           "alten Daten und braucht dafür bis zu 5,2 GB, frei sind 1 GB.")),
     ((0, "1000 99999999\n", ""), "Das Archiv von shop_data ließ sich nicht prüfen (1000 99999999)."),
     ((0, f"1000 99999999 {'x' * 64} {SIZE}\n", ""), "Das Archiv von shop_data ließ sich nicht prüfen (1000 99999999"),
     ((125, "", "Unable to find image 'busybox:1.37' locally\n"), "Das Archiv von shop_data ließ sich nicht prüfen (Unable to find image"),

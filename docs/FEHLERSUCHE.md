@@ -1,6 +1,6 @@
 # Fehlersuche
 
-Nodvard Deck steht unter der Lizenz PolyForm Noncommercial: Quelltext einsehbar, kostenlos für den privaten Gebrauch. Nachfolgend sind 20 häufige Probleme bei Erst-Einrichtung und laufendem Betrieb mit Symptom, Ursache und Lösung zusammengefasst.
+Nodvard Deck steht unter der Lizenz PolyForm Noncommercial: Quelltext einsehbar, kostenlos für den privaten Gebrauch. Nachfolgend sind 19 häufige Probleme bei Erst-Einrichtung und laufendem Betrieb mit Symptom, Ursache und Lösung zusammengefasst.
 
 ## 1. Einrichtungscode nicht gefunden
 * **Symptom:** Beim ersten Aufruf des Einrichtungsassistenten unter `/setup` wird ein Einrichtungscode verlangt, der auf der Weboberfläche nirgends angezeigt wird.
@@ -96,8 +96,3 @@ Nodvard Deck steht unter der Lizenz PolyForm Noncommercial: Quelltext einsehbar,
 * **Symptom:** In der Update-Übersicht von Nodvard Shield stehen Pakete dauerhaft als verzögert oder zurückgehalten und lassen sich nicht einspielen.
 * **Ursache:** Drei verschiedene Fälle: Ubuntu verteilt manche Pakete schrittweise per Phasing; apt hält Pakete zurück, weil die Aktualisierung andere Pakete entfernen oder neu installieren müsste; oder ein Paket ist mit `apt-mark hold` ausdrücklich gesperrt.
 * **Lösung:** Phasing: abwarten. Zurückgehaltene Abhängigkeiten: auf dem Server `sudo apt full-upgrade` ausführen und die angezeigten Änderungen prüfen. Ausdrückliche Sperre: `apt-mark showhold` zeigt sie; ist sie unbeabsichtigt, hebt `sudo apt-mark unhold <Paketname>` sie auf. Ein `full-upgrade` löst eine solche Sperre nicht.
-
-## 20. Veraltete Handy-App bei Kontoeinstellungen
-* **Symptom:** Beim Versuch, das Passwort zu ändern oder den zweiten Faktor in einer mobilen App zu verwalten, schlägt der Vorgang fehl.
-* **Ursache:** Ältere App-Fassungen unterstützen die zwingend erforderliche zusätzliche Code-Abfrage bei sicherheitsrelevanten Kontoänderungen noch nicht.
-* **Lösung:** Führe ein Update deiner Smartphone-App durch oder öffne die Einstellungen zur Passwortänderung vorübergehend im Desktop-Browser.

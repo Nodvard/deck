@@ -1453,7 +1453,8 @@ Die Detailantwort ergänzt `hosts` und `certificates_note`. Jeder Server trägt 
 | `fail2ban` | `null` ohne Stand, sonst `status`, `banned` (Zahl oder `null`), `checked_at`, `error` (Text oder `null`); zuletzt gespeicherte aktuelle Sperren, keine Wochensumme |
 | `lynis` | `null` ohne erfolgreichen Wert, sonst `hardening_index` und `created_at` des letzten erfolgreichen Audits |
 | `findings` | `new` und `resolved`, jeweils Listen mit `id`, `path`, `signature`, `status` |
-| `certificates` | derzeit `null`, weil Shield keine Zertifikatsabläufe speichert; `certificates_note` erklärt diese Grenze |
+| `certificates` | immer `null` (veraltet) |
+| `expiring_certificates`, `certificates_checked_at` | `null` ohne Außenprüfung, sonst die Zertifikate der letzten Außenprüfung, die in 30 Tagen ablaufen oder abgelaufen sind (`hostname`, `port`, `expires_at`, `days_remaining` ab Berichtszeit) und der Zeitpunkt dieser Prüfung (`certificates_checked_at`); `certificates_note` nennt die Quelle |
 
 `null` bedeutet unbekannt, nicht null Funde oder null auslaufende Zertifikate. `new` enthält im Zeitraum erkannte
 Schadsoftware-Funde; `resolved` enthält Funde, deren letzter Statuswechsel im Zeitraum zu `quarantined`, `deleted`
@@ -1494,13 +1495,17 @@ Der Serverstand enthält:
 | `host_id`, `host_name` | Kennung und Anzeigename |
 | `running` | Ob ein manueller oder geplanter Lauf aktiv ist |
 | `external_enabled` | Wirksamer Schalter für die Außenprüfung |
-| `cve` | `null` vor der ersten Prüfung, sonst `{status, checked_at, findings[], counts, error}` |
+| `cve` | `null` vor der ersten Prüfung, sonst `{status, checked_at, findings[], counts, error, unrated}` |
 | `external` | `null` vor der ersten Außenprüfung, sonst `{status, checked_at, open_ports[], new_ports[], certificates[], warnings[], error}` |
 
 Zeitangaben sind Unix-Sekunden. `cve.status` ist `ok`, `error` oder `unsupported`.
 Ein CVE-Fund enthält `{package, installed_version, cve, severity, fixed_version}`.
 `severity` ist `critical`, `high`, `medium`, `low` oder `unknown`; `fixed_version` ist ohne bekannte Behebung `null`.
 `counts` enthält `high` und `critical` als Anzahl der Paket/CVE-Funde dieser Schwere.
+`findings` enthält bei Debian und Proxmox nur Lücken, für die Debian eine neuere Korrekturversion kennt als die installierte.
+`unrated` zählt, was nicht gemeldet wird: `no_fix` (keine Korrektur verfügbar), davon `unimportant` (von Debian als unbedeutend
+eingestuft), `undetermined` (noch nicht bewertet) und `foreign` (Pakete, deren Version nicht aus Debian stammt, etwa `pve` oder `pmx`; nur offene, unbewertete und solche mit neuerer Korrektur).
+Das Feld ist `null`, wenn die Quelle keine solche Zählung liefert.
 Ein Fehler oder ein nicht unterstützter Stand ist keine vollständige Prüfung, auch wenn die Fundliste leer ist.
 Die Update-Zentrale für den Server liegt unter `/ext/shield/soc?tab=updates&host=<host_id>`.
 
@@ -1869,6 +1874,11 @@ Servers“) und für die Farbe der Temperatur auf der Seite; `GET /ext/system/ho
 `temp_warn_c` (gültige Grenze) und `temp_warn_own_c` (eigene oder `null`). Eine Temperatur meldet erst die zweite Prüfung in
 Folge über der Grenze, eine einzelne Spitze bleibt still; ändert sich die Grenze zwischen zwei Prüfungen, beginnt die
 Zählung neu.
+
+`GET /ext/system/hosts/{host_id}/info` und `/live` fragen Netzlaufwerke (nfs, cifs, sshfs) nie ab. Sie nennen sie in
+`network_mounts` (`[{fstype, mount, device}]`, aus `/proc/mounts`, ohne Belegung). `df_status` (`ok`, `timeout`, `failed`,
+`unavailable`; `null` bei einem älteren Stand) sagt, wie das Lesen der Platten endete, `df_failed` ist `true`, wenn es
+nicht `ok` war: Die Dateisysteme sind dann leer oder unvollständig, und die Oberfläche weist darauf hin.
 
 Jede Änderung der eigenen Grenze steht im Protokoll als `ext_system.temp_limit_changed` (Ziel: der Server, Ersteller: der
 angemeldete Benutzer, `detail`: `own_c_before`, `own_c`, `effective_c`). Ein PUT mit dem schon gespeicherten Wert schreibt

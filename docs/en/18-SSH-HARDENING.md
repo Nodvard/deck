@@ -4,7 +4,7 @@ Each server card in **Intrusion protection** offers **Harden SSH**. Deck must us
 
 If the public Deck key is missing from the login user's `authorized_keys`, **Install Deck key** adds it as a separate action. Existing keys remain intact. Key installation, hardening and undo all pass through the action gate at high risk and are recorded in the audit log.
 
-This requires the current Shield helper, version 26 or later. If the helper is missing or outdated, run the server setup command again. Hardening changes only `/etc/ssh/sshd_config.d/nodvard-haertung.conf`:
+This requires the current Shield helper, version 26 or later. If the helper is missing or outdated, run the server setup command again. Where Deck logs in as root, it shows the state without the helper and places nothing on the server. The helper is installed with the first approved change (harden SSH, install key, undo, Fail2ban settings); the approval says so and the audit log records it. Hardening changes only `/etc/ssh/sshd_config.d/nodvard-haertung.conf`:
 
 ```text
 PasswordAuthentication no

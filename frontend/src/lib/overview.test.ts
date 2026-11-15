@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { helperHintTarget, helperHintText, hostHealth, hostStatusText } from "./overview";
+import { helperHintTarget, helperHintText, hostHealth, hostStatusText, formatBytes } from "./overview";
 
 const base = { status: "unknown", last_seen_at: null, power_state: null, gone_since: null, provider_ext_id: null };
 
@@ -69,5 +69,13 @@ describe("helperHintText", () => {
     expect(helperHintTarget({ ...base, modules: ["Docker"], full_rule_removable: true })).toBe("/settings/hosts/h-pi?befehl=1");
     expect(helperHintTarget({ ...base, modules: [], full_rule_removable: true })).toBe("/settings/hosts/h-pi?befehl=regel-entfernen");
     expect(helperHintTarget({ ...base, modules: [] })).toBe("/settings/hosts/h-pi");
+  });
+});
+
+describe("formatBytes", () => {
+  it("ganze Werte ohne Nachkommastelle", () => {
+    expect(formatBytes(608 * 1024 ** 3)).toBe("608 GB");
+    expect(formatBytes(3.6 * 1024 ** 3)).toBe("3.6 GB");
+    expect(formatBytes(2 * 1024 ** 4)).toBe("2 TB");
   });
 });

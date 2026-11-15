@@ -262,7 +262,7 @@ describe("ProxmoxNodePage", () => {
     fireEvent.click(toggle);
 
     await screen.findByText("12.5 %");
-    expect(screen.getByText(/512.*MB.*\/.*2\.0 GB/)).toBeInTheDocument();
+    expect(screen.getByText(/512.*MB.*\/.*2 GB/)).toBeInTheDocument();
   });
 
   it("gruppiert Hosts nach Proxmox-Verbindung (Multi-Instanz)", async () => {
@@ -650,8 +650,8 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     await screen.findByTestId("pool-local");
     fireEvent.click(screen.getByRole("tab", { name: "Speicher" }));
     const pool = screen.getByTestId("pool-local");
-    expect(pool.textContent).toContain("Zabbix (45.0 GB)");
-    expect(pool.textContent).toContain("3 Backups (17.0 GB)");
+    expect(pool.textContent).toContain("Zabbix (45 GB)");
+    expect(pool.textContent).toContain("3 Backups (17 GB)");
     expect(pool.textContent).toContain("46.4 %");
     expect(within(pool).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "46.4");
   });

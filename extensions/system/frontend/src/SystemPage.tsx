@@ -16,7 +16,7 @@ import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/sr
 import { useUrlParams } from "../../../_shared/frontend/src/location";
 import { Button, EmptyState, Notice } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
-import { formatBytes, formatUptime } from "./format";
+import { dfFailedText, formatBytes, formatUptime } from "./format";
 import { type LiveData, LiveView } from "./LiveView";
 import { TempLimit } from "./TempLimit";
 import { fetchSystem, SystemQueryError } from "./systemQuery";
@@ -77,6 +77,9 @@ export interface SystemInfo {
   swap_total: number | null;
   swap_used: number | null;
   disks: Disk[];
+  network_mounts?: { fstype: string; mount: string; device: string }[];
+  df_status?: string | null;
+  df_failed?: boolean;
   failed_units: string[];
   running_units?: string[];
   /** Dienste, für die "Neu starten" überhaupt in Frage kommt (ohne gesperrte wie ssh, dbus, systemd-…). */
@@ -195,6 +198,14 @@ function InfoView({ info, canRestart, busyUnit, onRestart, onTempLimitChanged }:
           ))}
         </tbody>
       </table>
+      {info.df_failed && (
+        <p className="-mt-4 mb-6 text-sm text-amber-300" data-testid="df-timeout">{dfFailedText(info.df_status)}</p>
+      )}
+      {(info.network_mounts?.length ?? 0) > 0 && (
+        <ul className="-mt-4 mb-6 text-sm opacity-80" data-testid="network-mounts">
+          {info.network_mounts?.map((m) => <li key={m.mount}>{m.mount} · {m.device} · {m.fstype}: Netzlaufwerk, Belegung nicht gemessen</li>)}
+        </ul>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <div>

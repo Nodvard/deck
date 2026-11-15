@@ -12,12 +12,18 @@ function initials(name: string): string {
   return name.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 2) || "?";
 }
 
+/** Statuspunkt eines Dienstes: ein gemeldetes Problem (`tone`) geht vor, sonst zählt, ob er läuft. */
+function serviceDot(service: Pick<ServiceOut, "state" | "tone">): string {
+  if (service.tone === "danger") return "problem";
+  if (service.tone === "warn") return "unknown";
+  return service.state === "running" ? "online" : "stopped";
+}
+
 const AVATAR = "grid h-10 w-10 flex-none place-items-center rounded-lg text-sm font-bold uppercase text-on-accent";
 
 export function AppTile({ service }: { service: ServiceOut }) {
   const href = safeHref(service.url);
   const hue = hueFor(service.name);
-  const running = service.state === "running";
   const inner = (
     <>
       <span className={AVATAR} ref={styleRef({ background: `hsl(${hue} 55% 45%)` })}>
@@ -26,7 +32,7 @@ export function AppTile({ service }: { service: ServiceOut }) {
       <span className="min-w-0 flex-1">
         <span className="block break-words text-sm font-medium">{service.name}</span>
         <span className="flex items-center gap-1.5 text-[11px] text-white/45">
-          <span className={`status-dot ${running ? "online" : "stopped"}`} ref={styleRef({ width: "0.4rem", height: "0.4rem" })} />
+          <span className={`status-dot ${serviceDot(service)}`} ref={styleRef({ width: "0.4rem", height: "0.4rem" })} />
           <span className="min-w-0 break-words">{service.host ?? "–"}</span>
         </span>
       </span>

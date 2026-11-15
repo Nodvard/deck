@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Nodvard Deck is licensed under PolyForm Noncommercial: source-available, free for personal use. Below are 20 frequent issues during initial setup and everyday operation with symptoms, causes, and solutions.
+Nodvard Deck is licensed under PolyForm Noncommercial: source-available, free for personal use. Below are 19 frequent issues during initial setup and everyday operation with symptoms, causes, and solutions.
 
 ## 1. Setup code not found
 * **Symptom:** Opening the setup wizard at `/setup` prompts for an initial setup code that is not displayed on the web interface.
@@ -96,8 +96,3 @@ Nodvard Deck is licensed under PolyForm Noncommercial: source-available, free fo
 * **Symptom:** Packages in the Nodvard Shield update manager appear permanently as delayed or held back and cannot be installed.
 * **Cause:** Ubuntu delivers certain packages in staggered phases, or apt requires the removal of obsolete packages before applying the upgrade.
 * **Solution:** Phasing: wait. Held-back dependencies: run `sudo apt full-upgrade` on the server and review the listed changes. Explicit hold: `apt-mark showhold` lists it; if unintended, `sudo apt-mark unhold <package>` lifts it. A `full-upgrade` does not lift such a hold.
-
-## 20. Outdated mobile app during account security updates
-* **Symptom:** Attempting to update a password or modify two-factor settings from a mobile app results in a rejection error.
-* **Cause:** Older mobile app builds do not prompt for the mandatory secondary verification code required for security modifications.
-* **Solution:** Update the mobile application to the latest version or make the account adjustments directly in a desktop browser session.

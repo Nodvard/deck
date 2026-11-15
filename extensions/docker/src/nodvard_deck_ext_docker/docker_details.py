@@ -142,15 +142,20 @@ def parse_system_df(text: str) -> list[dict[str, Any]]:
     return rows
 
 
-def parse_images(text: str) -> list[dict[str, Any]]:
-    """`docker images --format '{{json .}}'`. "Containers" kennt erst neueres Docker (z. B. 29.x); älteres liefert "N/A",
-    dann bleibt `in_use` offen (None)."""
+def parse_images(text: str, dangling: str = "") -> list[dict[str, Any]]:
+    """`docker images --format '{{json .}}'`, dazu dieselbe Liste mit `--filter dangling=true`: Docker 29 zeigt Images
+    ohne Namen nur noch so. "Containers" kennt erst neueres Docker; älteres liefert "N/A", dann bleibt `in_use` offen."""
     images = []
-    for row in _json_lines(text):
+    seen: set[tuple[str, str, str]] = set()
+    for row in _json_lines(text) + _json_lines(dangling):
         repo, tag = row.get("Repository") or "<none>", row.get("Tag") or "<none>"
+        image_id = str(row.get("ID") or "").removeprefix("sha256:")[:12]
+        if (image_id, repo, tag) in seen:
+            continue
+        seen.add((image_id, repo, tag))
         containers = str(row.get("Containers") or "")
         images.append({
-            "id": str(row.get("ID") or "").removeprefix("sha256:")[:12],
+            "id": image_id,
             "name": f"{repo}:{tag}" if repo != "<none>" else None,
             "dangling": repo == "<none>" and tag == "<none>",
             "size": parse_size(str(row.get("Size") or "")),

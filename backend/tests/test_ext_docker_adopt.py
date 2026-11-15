@@ -217,6 +217,7 @@ async def test_files_must_be_readable_compose_files():
             'Docker Compose kann die Datei nicht lesen: service "app" refers to undefined volume fehlt: invalid compose project',
         ),
         ("docker: 'compose' is not a docker command.\nSee 'docker --help'\n", "Auf dem Server fehlt Docker Compose v2, also der Befehl „docker compose“."),
+        ("unknown flag: --ansi\nSee 'docker --help'.\n\nUsage:  docker [OPTIONS] COMMAND\n", "Auf dem Server fehlt Docker Compose v2, also der Befehl „docker compose“."),
     ],
 )
 async def test_compose_itself_must_read_the_file(output, reason):

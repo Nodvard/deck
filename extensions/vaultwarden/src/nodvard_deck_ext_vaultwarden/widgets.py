@@ -40,11 +40,12 @@ def status_rows(status: dict[str, Any]) -> list[dict[str, Any]]:
     if signups is True:
         rows.append({
             "title": "Registrierung",
-            "subtitle": "Jeder, der die Adresse kennt, kann ein Konto anlegen.",
-            "label": "offen", "tone": "warn",
+            "subtitle": "Nicht als abgeschaltet gemeldet. Ob neue Konten möglich sind, hängt von SIGNUPS_ALLOWED ab.",
+            "label": "prüfen", "tone": "neutral",
         })
     elif signups is False:
         rows.append({
-            "title": "Registrierung", "subtitle": "Neue Konten nur über Einladung.", "label": "zu", "tone": "good",
+            "title": "Registrierung", "subtitle": "Vaultwarden bietet keine freie Registrierung an.",
+            "label": "zu", "tone": "good",
         })
     return rows

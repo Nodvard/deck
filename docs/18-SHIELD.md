@@ -1,6 +1,6 @@
 # Nodvard Shield
 
-## CVE-Abgleich und Prüfung von außen
+## CVE-Abgleich und externe Prüfung aus dem Heimnetz
 
 In der Shield-Übersicht stehen je Server zwei Karten. **CVE-Abgleich** zeigt installierte Pakete mit bekannten
 Sicherheitslücken: Paketname, installierte Version, CVE, Schwere und die Version mit der Behebung, sofern bekannt.
@@ -28,7 +28,7 @@ Lücken sind in diesen CSAF-Meldungen nicht vollständig enthalten. Nicht mit de
 und nicht eindeutig zuordenbare Produktvarianten erscheinen als Prüfproblem.
 Drittanbieterpakete und nicht unterstützte Distributionsstände können außerhalb der Datenquellen liegen.
 
-**Prüfung von außen** baut von Deck aus kurze TCP-Verbindungen zu gängigen Ports und den bekannten Diensten
+Die **Externe Prüfung** baut von Deck aus kurze TCP-Verbindungen zu gängigen Ports und den bekannten Diensten
 des Servers auf. Der erste erfolgreiche Lauf bildet den Vergleichsstand. Später zusätzlich offene Ports
 erscheinen als Warnung. Ein fehlgeschlagener Lauf ersetzt diesen Vergleichsstand nicht.
 Geprüft wird aus dem Heimnetz, also von dem Rechner aus, auf dem Deck läuft, nicht aus dem Internet. Ob ein Port

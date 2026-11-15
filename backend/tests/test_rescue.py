@@ -152,23 +152,388 @@ def test_health_is_503_and_never_says_ok(env):
     assert status == 503 and body == b""
 
 
-@pytest.mark.parametrize(("method", "path", "status"), [
+HSTS_VARIABLES = ("NODVARD_DECK_HSTS", "LATTICE_HSTS")
+RESCUE_RESPONSES = [
     ("GET", "/", 503),
     ("HEAD", "/", 503),
     ("GET", "/api/v1/health", 503),
     ("GET", "/rescue/status", 200),
     ("GET", "/rescue/log", 401),
     ("POST", "/rescue/unlock", 303),
-])
-@pytest.mark.parametrize("proto", [None, "http", "https"])
-def test_rescue_responses_always_include_hsts(env, method, path, status, proto):
+]
+
+
+@pytest.fixture
+def hsts_env(monkeypatch, tmp_path_factory):
+    """Umgebung ohne HSTS-Schalter in einem Arbeitsordner ohne `.env`; der Test setzt ihn über das zurückgegebene `monkeypatch`."""
+    for name in list(os.environ):
+        if name.upper() in HSTS_VARIABLES:
+            monkeypatch.delenv(name)
+    monkeypatch.chdir(tmp_path_factory.mktemp("arbeitsordner"))
+    return monkeypatch
+
+
+def _rescue_headers(env, method, path, proto) -> tuple[int, list[tuple[str, str]]]:
     body = f"code={env.code}" if method == "POST" else None
     headers = {} if proto is None else {"X-Forwarded-Proto": proto}
-    actual, _, _, response = env.request(method, path, body, headers)
+    status, _, _, response = env.request(method, path, body, headers)
+    return status, [(name.lower(), value) for name, value in response.getheaders()]
+
+
+def _hsts(headers) -> list[str]:
+    return [value for name, value in headers if name == "strict-transport-security"]
+
+
+@pytest.mark.parametrize(("method", "path", "status"), RESCUE_RESPONSES)
+@pytest.mark.parametrize("proto", [None, "http", "https"])
+@pytest.mark.parametrize("switch", [None, "true"])
+def test_rescue_responses_always_include_hsts(env, hsts_env, method, path, status, proto, switch):
+    if switch is not None:
+        hsts_env.setenv("NODVARD_DECK_HSTS", switch)
+    actual, headers = _rescue_headers(env, method, path, proto)
     assert actual == status
-    assert [value for name, value in response.getheaders() if name.lower() == "strict-transport-security"] == [
-        "max-age=31536000",
-    ]
+    assert _hsts(headers) == ["max-age=31536000"]
+
+
+@pytest.mark.parametrize(("method", "path", "status"), RESCUE_RESPONSES)
+@pytest.mark.parametrize("proto", [None, "http", "https"])
+def test_rescue_responses_omit_hsts_when_switched_off(env, hsts_env, method, path, status, proto):
+    hsts_env.setenv("NODVARD_DECK_HSTS", "false")
+    actual, headers = _rescue_headers(env, method, path, proto)
+    assert actual == status
+    assert _hsts(headers) == []
+
+
+def _without_volatile(headers) -> list[tuple[str, str]]:
+    # Das Sitzungs-Cookie ist bei jeder Anmeldung ein anderes.
+    return sorted(pair for pair in headers if pair[0] not in ("date", "set-cookie"))
+
+
+@pytest.mark.parametrize(("method", "path", "status"), RESCUE_RESPONSES)
+def test_the_hsts_switch_changes_no_other_rescue_header(env, hsts_env, method, path, status):
+    _, on = _rescue_headers(env, method, path, "https")
+    hsts_env.setenv("NODVARD_DECK_HSTS", "false")
+    _, off = _rescue_headers(env, method, path, "https")
+    assert _without_volatile(on) == _without_volatile([*off, ("strict-transport-security", "max-age=31536000")])
+    assert len(off) == len(on) - 1
+
+
+HSTS_ON = ("1", "on", "t", "true", "y", "yes", "TRUE", "On", "Yes")
+HSTS_OFF = ("0", "off", "f", "false", "n", "no", "FALSE", "Off", "No")
+HSTS_UNREADABLE = ("", " ", " false", "false ", " true", "nein", "ja", "2", "disabled")
+
+
+@pytest.mark.parametrize(("environ", "expected"), [
+    ({}, True),
+    *[({"NODVARD_DECK_HSTS": value}, True) for value in HSTS_ON],
+    *[({"NODVARD_DECK_HSTS": value}, False) for value in HSTS_OFF],
+    *[({"NODVARD_DECK_HSTS": value}, False) for value in HSTS_UNREADABLE],
+    ({"LATTICE_HSTS": "false"}, False),
+    ({"LATTICE_HSTS": "true"}, True),
+    ({"NODVARD_DECK_HSTS": "true", "LATTICE_HSTS": "false"}, True),
+    ({"NODVARD_DECK_HSTS": "false", "LATTICE_HSTS": "true"}, False),
+    ({"NODVARD_DECK_HSTS": "", "LATTICE_HSTS": "true"}, False),
+    ({"nodvard_deck_hsts": "false"}, False),
+    ({"LATTICE_HSTS".title(): "false"}, False),
+    ({"NODVARD_DECK_HSTS_X": "false", "X_NODVARD_DECK_HSTS": "false", "HSTS": "false"}, True),
+])
+def test_hsts_enabled_reads_the_switch(environ, expected):
+    assert rescue.hsts_enabled(environ) is expected
+
+
+def test_hsts_enabled_reads_the_process_environment(hsts_env):
+    assert rescue.hsts_enabled() is True
+    hsts_env.setenv("NODVARD_DECK_HSTS", "false")
+    assert rescue.hsts_enabled() is False
+
+
+def _app_setting(monkeypatch, environ, *, env_file=None) -> bool | None:
+    """`Settings.hsts` für diese Umgebung; `None`, wenn die Anwendung damit nicht startet."""
+    from nodvard_deck import config
+    from pydantic import ValidationError
+
+    monkeypatch.setattr(config, "_warned_legacy", set())
+    monkeypatch.setattr(config, "_shadowed_legacy", set())
+    for name, value in environ.items():
+        monkeypatch.setenv(name, value)
+    try:
+        return config.Settings(_env_file=env_file).hsts
+    except (ValidationError, OSError, UnicodeDecodeError):
+        return None
+
+
+@pytest.mark.parametrize("environ", [
+    {},
+    *[{"NODVARD_DECK_HSTS": value} for value in (*HSTS_ON, *HSTS_OFF)],
+    {"LATTICE_HSTS": "false"},
+    {"LATTICE_HSTS": "true"},
+    {"NODVARD_DECK_HSTS": "true", "LATTICE_HSTS": "false"},
+    {"NODVARD_DECK_HSTS": "false", "LATTICE_HSTS": "true"},
+    {"nodvard_deck_hsts": "false"},
+])
+def test_rescue_and_app_read_the_hsts_switch_alike(env, hsts_env, environ):
+    from nodvard_deck.api.security_headers import secure_headers
+
+    setting = _app_setting(hsts_env, environ)
+    assert setting is not None
+    assert rescue.hsts_enabled() is setting
+    app = [value.decode() for name, value in secure_headers([], https=True, hsts=setting) if name == b"strict-transport-security"]
+    _, headers = _rescue_headers(env, "GET", "/", "https")
+    assert _hsts(headers) == app
+    assert app == (["max-age=31536000"] if setting else [])
+
+
+@pytest.mark.parametrize("environ", [
+    *[{"NODVARD_DECK_HSTS": value} for value in HSTS_UNREADABLE],
+    {"LATTICE_HSTS": "nein"},
+    {"NODVARD_DECK_HSTS": "", "LATTICE_HSTS": "true"},
+])
+def test_rescue_sends_no_hsts_for_a_switch_the_app_cannot_read(env, hsts_env, environ):
+    assert _app_setting(hsts_env, environ) is None
+    _, headers = _rescue_headers(env, "GET", "/", "https")
+    assert _hsts(headers) == []
+
+
+def _write_env_file(content: bytes | str) -> None:
+    Path(".env").write_bytes(content.encode() if isinstance(content, str) else content)
+
+
+def _app_reads(monkeypatch, environ=None) -> bool | None:
+    """Wie `_app_setting`, aber mit der `.env` im Arbeitsordner, so wie die Anwendung startet."""
+    return _app_setting(monkeypatch, environ or {}, env_file=".env")
+
+
+@pytest.mark.parametrize(("method", "path", "status"), RESCUE_RESPONSES)
+def test_rescue_omits_hsts_when_only_the_env_file_switches_it_off(env, hsts_env, method, path, status):
+    _write_env_file("NODVARD_DECK_HSTS=false\n")
+    assert _app_reads(hsts_env) is False
+    actual, headers = _rescue_headers(env, method, path, "https")
+    assert actual == status
+    assert _hsts(headers) == []
+
+
+def test_rescue_keeps_hsts_without_an_env_file(env, hsts_env):
+    assert not Path(".env").exists()
+    assert _app_reads(hsts_env) is True
+    assert rescue.hsts_enabled() is True
+    _, headers = _rescue_headers(env, "GET", "/", "https")
+    assert _hsts(headers) == ["max-age=31536000"]
+
+
+def test_a_folder_named_like_the_env_file_counts_as_missing(hsts_env):
+    Path(".env").mkdir()
+    assert _app_reads(hsts_env) is True
+    assert rescue.hsts_enabled() is True
+
+
+def test_rescue_reads_the_env_file_of_the_working_directory_only(hsts_env, tmp_path):
+    (tmp_path / ".env").write_text("NODVARD_DECK_HSTS=false\n", encoding="utf-8")
+    assert rescue.hsts_enabled() is True
+    assert rescue.hsts_enabled(env_file=tmp_path / ".env") is False
+
+
+ENV_FILE_LINES = [
+    "",
+    "\n\n",
+    "# NODVARD_DECK_HSTS=false\n",
+    "OTHER=false\nNODVARD_DECK_HSTS_X=false\nX_NODVARD_DECK_HSTS=false\nHSTS=false\n",
+    *[f"NODVARD_DECK_HSTS={value}\n" for value in (*HSTS_ON, *HSTS_OFF)],
+    *[f"NODVARD_DECK_HSTS={value}\n" for value in ("", "nein", "ja", "2", "disabled", "fal se", "'", '"')],
+    "NODVARD_DECK_HSTS=false",
+    "NODVARD_DECK_HSTS=true  \n",
+    "NODVARD_DECK_HSTS=true\t\n",
+    "NODVARD_DECK_HSTS=true\r\n",
+    "NODVARD_DECK_HSTS=false\rNODVARD_DECK_HSTS=true\r",
+    "NODVARD_DECK_HSTS=false\r\nNODVARD_DECK_HSTS=true\r\n",
+    "NODVARD_DECK_HSTS='false' x\n",
+    'NODVARD_DECK_HSTS="false" x\n',
+    'NODVARD_DECK_HSTS="true\\"\n',
+    "NODVARD_DECK_HSTS='true\\'\n",
+    'NODVARD_DECK_HSTS="false\\"\n',
+    "OTHER='eins\\\nNODVARD_DECK_HSTS=false\n'\n",
+    "OTHER='eins\nzwei'\nNODVARD_DECK_HSTS=false\n",
+    "NODVARD_DECK_HSTS=false\r\n",
+    "NODVARD_DECK_HSTS=true\rNODVARD_DECK_HSTS=false\r",
+    "NODVARD_DECK_HSTS=\r\nOTHER=1\r\n",
+    "NODVARD_DECK_HSTS='false'\n",
+    'NODVARD_DECK_HSTS="false"\n',
+    "NODVARD_DECK_HSTS='true'\n",
+    'NODVARD_DECK_HSTS="true"\n',
+    'NODVARD_DECK_HSTS=" false"\n',
+    "NODVARD_DECK_HSTS='false '\n",
+    'NODVARD_DECK_HSTS="fal\\se"\n',
+    'NODVARD_DECK_HSTS="true" x\n',
+    "NODVARD_DECK_HSTS='true' x\nOTHER=1\n",
+    'NODVARD_DECK_HSTS="true\n',
+    "NODVARD_DECK_HSTS='true\nOTHER='\n",
+    'NODVARD_DECK_HSTS="tr\nue"\n',
+    'NODVARD_DECK_HSTS=""\n',
+    "NODVARD_DECK_HSTS = false\n",
+    "NODVARD_DECK_HSTS=  false  \n",
+    "NODVARD_DECK_HSTS\t=\tfalse\t\n",
+    "   NODVARD_DECK_HSTS=false\n",
+    "NODVARD_DECK_HSTS=false # aus\n",
+    "NODVARD_DECK_HSTS=false#aus\n",
+    "NODVARD_DECK_HSTS='false' # aus\n",
+    "NODVARD_DECK_HSTS=true # false\n",
+    "NODVARD_DECK_HSTS= # false\n",
+    "export NODVARD_DECK_HSTS=false\n",
+    "export   NODVARD_DECK_HSTS='false'\n",
+    "export\tNODVARD_DECK_HSTS=false\n",
+    "exportNODVARD_DECK_HSTS=false\n",
+    "export =1\nNODVARD_DECK_HSTS=false\n",
+    "export NODVARD_DECK_HSTS\n",
+    "'NODVARD_DECK_HSTS'=false\n",
+    '"NODVARD_DECK_HSTS"=false\n',
+    "NODVARD_DECK_HSTS\n",
+    "NODVARD_DECK_HSTS\nLATTICE_HSTS=false\n",
+    "NODVARD_DECK_HSTS:false\n",
+    "=false\nNODVARD_DECK_HSTS=false\n",
+    "nodvard_deck_hsts=false\n",
+    "Nodvard_Deck_Hsts=false\n",
+    "NODVARD_DECK_HSTS=true\nNODVARD_DECK_HSTS=false\n",
+    "NODVARD_DECK_HSTS=false\nNODVARD_DECK_HSTS=true\n",
+    "NODVARD_DECK_HSTS=true\nnodvard_deck_hsts=false\n",
+    "NODVARD_DECK_HSTS=true\nnodvard_deck_hsts=false\nNODVARD_DECK_HSTS=true\n",
+    "nodvard_deck_hsts=false\nNODVARD_DECK_HSTS=true\nnodvard_deck_hsts=false\n",
+    "LATTICE_HSTS=false\n",
+    "LATTICE_HSTS=true\n",
+    "LATTICE_HSTS=nein\n",
+    f"export {'LATTICE_HSTS'.lower()}='false'\n",
+    "NODVARD_DECK_HSTS=true\nLATTICE_HSTS=false\n",
+    "LATTICE_HSTS=true\nNODVARD_DECK_HSTS=false\n",
+    "NODVARD_DECK_HSTS=\nLATTICE_HSTS=true\n",
+    "NODVARD_DECK_HSTS=nein\nLATTICE_HSTS=true\n",
+    'OTHER="eins\nNODVARD_DECK_HSTS=false\nzwei"\n',
+    "OTHER='eins\nNODVARD_DECK_HSTS=false\nzwei'\n",
+    'OTHER="eins\nzwei"\nNODVARD_DECK_HSTS=false\n',
+    'OTHER="eins \\" zwei\nNODVARD_DECK_HSTS=false\n"\n',
+    "OTHER='eins \\' zwei\nNODVARD_DECK_HSTS=false\n'\n",
+    'OTHER="eins\\"\nNODVARD_DECK_HSTS=false\n',
+    "OTHER='eins\\'\nNODVARD_DECK_HSTS=false\n",
+    'OTHER="eins\\\\"\nNODVARD_DECK_HSTS=false\n',
+    'OTHER="eins\\\nNODVARD_DECK_HSTS=false\n"\n',
+    'OTHER="offen\nNODVARD_DECK_HSTS=false\n',
+    "OTHER=\"eins\" 'zwei\nNODVARD_DECK_HSTS=false\n'\n",
+    "OTHER=eins \"zwei\nNODVARD_DECK_HSTS=false\n",
+    "OTHER=1 NODVARD_DECK_HSTS=false\n",
+    "# Kommentar \"offen\nNODVARD_DECK_HSTS=false\n",
+    "\ufeffNODVARD_DECK_HSTS=false\n",
+    "\ufeff\ufeffNODVARD_DECK_HSTS=false\n",
+    "OTHER=1\n\ufeffNODVARD_DECK_HSTS=false\n",
+    "\ufeff\r\nNODVARD_DECK_HSTS=false\r\n",
+    "NODVARD_DECK_HSTS=false\xa0\n",
+    "NODVARD_DECK_HSTS=\xa0false\n",
+    "NODVARD_DECK_HSTS=false\x0c\n",
+    "NODVARD_DECK_HSTS=false\x0cNODVARD_DECK_HSTS=true\n",
+    "NODVARD_DECK_HSTS=false\u2028NODVARD_DECK_HSTS=true\n",
+    "\u2028NODVARD_DECK_HSTS=false\n",
+    "NODVARD_DECK_HSTS=${OTHER}\n",
+    "OTHER=true\nNODVARD_DECK_HSTS=${OTHER}x\n",
+    b"NODVARD_DECK_HSTS=false\n\xff\xfe\n",
+    b"\xff\nNODVARD_DECK_HSTS=true\n",
+    b"NODVARD_DECK_HSTS=true\n# gr\xfc\xdfe\n",
+]
+
+
+@pytest.mark.parametrize("content", ENV_FILE_LINES)
+def test_rescue_and_app_read_the_env_file_alike(env, hsts_env, content):
+    _write_env_file(content)
+    setting = _app_reads(hsts_env)
+    assert rescue.hsts_enabled() is bool(setting)
+    _, headers = _rescue_headers(env, "GET", "/", "https")
+    assert _hsts(headers) == (["max-age=31536000"] if setting else [])
+
+
+@pytest.mark.parametrize(("content", "expected"), [
+    ("NODVARD_DECK_HSTS=false\n", False),
+    ("export NODVARD_DECK_HSTS=false\n", False),
+    ('NODVARD_DECK_HSTS="false"\n', False),
+    ("NODVARD_DECK_HSTS = 'false' # aus\n", False),
+    ("LATTICE_HSTS=false\n", False),
+    ("NODVARD_DECK_HSTS=nein\n", False),
+    ("NODVARD_DECK_HSTS=\n", False),
+    (b"\xff\nNODVARD_DECK_HSTS=true\n", False),
+    ("NODVARD_DECK_HSTS=true\n", True),
+    ("NODVARD_DECK_HSTS=true\nLATTICE_HSTS=false\n", True),
+    ("LATTICE_HSTS=true\nNODVARD_DECK_HSTS=false\n", False),
+    ("OTHER=1\n", True),
+    ('OTHER="eins\nNODVARD_DECK_HSTS=false\nzwei"\n', True),
+])
+def test_the_env_file_switch_has_fixed_results(hsts_env, content, expected):
+    _write_env_file(content)
+    assert rescue.hsts_enabled() is expected
+
+
+ENV_AND_FILE = [
+    ({"NODVARD_DECK_HSTS": "true"}, "NODVARD_DECK_HSTS=false\n"),
+    ({"NODVARD_DECK_HSTS": "false"}, "NODVARD_DECK_HSTS=true\n"),
+    ({"LATTICE_HSTS": "true"}, "NODVARD_DECK_HSTS=false\n"),
+    ({"LATTICE_HSTS": "false"}, "NODVARD_DECK_HSTS=true\n"),
+    ({"NODVARD_DECK_HSTS": "true"}, "LATTICE_HSTS=false\n"),
+    ({"NODVARD_DECK_HSTS": "false"}, "LATTICE_HSTS=true\n"),
+    ({"NODVARD_DECK_HSTS": "true"}, "NODVARD_DECK_HSTS=nein\n"),
+    ({"NODVARD_DECK_HSTS": "nein"}, "NODVARD_DECK_HSTS=true\n"),
+    ({"NODVARD_DECK_HSTS": ""}, "NODVARD_DECK_HSTS=true\n"),
+    ({"OTHER": "false"}, "NODVARD_DECK_HSTS=false\n"),
+    ({"OTHER": "false"}, "NODVARD_DECK_HSTS=true\n"),
+]
+
+
+@pytest.mark.parametrize(("environ", "content"), ENV_AND_FILE)
+def test_the_environment_beats_the_env_file_like_in_the_app(env, hsts_env, environ, content):
+    _write_env_file(content)
+    setting = _app_reads(hsts_env, environ)
+    assert rescue.hsts_enabled() is bool(setting)
+    _, headers = _rescue_headers(env, "GET", "/", "https")
+    assert _hsts(headers) == (["max-age=31536000"] if setting else [])
+
+
+@pytest.mark.parametrize(("environ", "content", "expected"), [
+    ({"NODVARD_DECK_HSTS": "true"}, "NODVARD_DECK_HSTS=false\n", True),
+    ({"NODVARD_DECK_HSTS": "false"}, "NODVARD_DECK_HSTS=true\n", False),
+    ({"LATTICE_HSTS": "true"}, "NODVARD_DECK_HSTS=false\n", True),
+    ({"LATTICE_HSTS": "false"}, "NODVARD_DECK_HSTS=true\n", False),
+])
+def test_the_environment_beats_the_env_file(hsts_env, environ, content, expected):
+    _write_env_file(content)
+    for name, value in environ.items():
+        hsts_env.setenv(name, value)
+    assert rescue.hsts_enabled() is expected
+
+
+def test_an_unreadable_env_file_switches_hsts_off_unless_the_environment_decides(hsts_env):
+    _write_env_file(b"\xff\n")
+    assert _app_reads(hsts_env) is None
+    assert rescue.hsts_enabled() is False
+    hsts_env.setenv("NODVARD_DECK_HSTS", "true")
+    assert rescue.hsts_enabled() is True
+
+
+def test_an_env_file_that_cannot_be_opened_switches_hsts_off(hsts_env):
+    _write_env_file("NODVARD_DECK_HSTS=true\n")
+
+    def refuse(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    hsts_env.setattr("builtins.open", refuse)
+    assert rescue.hsts_enabled() is False
+
+
+def test_an_oversized_env_file_switches_hsts_off(hsts_env):
+    line = "NODVARD_DECK_HSTS=true\n"
+    _write_env_file(line + "#" * (rescue.ENV_FILE_LIMIT - len(line)))
+    assert rescue.hsts_enabled() is True
+    _write_env_file(line + "#" * (rescue.ENV_FILE_LIMIT - len(line) + 1))
+    assert rescue.hsts_enabled() is False
+
+
+def test_a_reference_in_the_env_file_switches_hsts_off(hsts_env):
+    """Die Anwendung setzt `${NAME}` ein, die Notseite nicht: Sie lässt die Kopfzeile dann weg."""
+    hsts_env.setenv("OTHER", "true")
+    _write_env_file("NODVARD_DECK_HSTS=${OTHER}\n")
+    assert _app_reads(hsts_env) is True
+    assert rescue.hsts_enabled() is False
 
 
 @pytest.mark.parametrize("method,path", [("GET", "/api/v1/auth/bootstrap"), ("POST", "/api/v1/auth/login"), ("GET", "/api/v1/hosts"),

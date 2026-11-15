@@ -42,12 +42,18 @@ def smart_details(smart: dict[str, Any]) -> dict[str, int | None]:
     return {"temperature_c": temperature, "power_on_hours": hours}
 
 
+def smart_unknown(health: Any) -> bool:
+    """Kein SMART-Befund: Proxmox nennt keinen Zustand oder konnte ihn nicht lesen (USB, RAID-Controller, virtuelle
+    Platte)."""
+    return str(health or "").upper() in ("", "UNKNOWN")
+
+
 def disk_assessment(
     health: str | None, life_left: int | None, temperature: int | None, temp_limit: int = 70,
 ) -> tuple[str, str]:
     """-> (Badge-Text, Ton). SMART-Befund zuerst, dann Abnutzung, dann Temperatur (ab `temp_limit`, dieselbe Schwelle
     wie die Meldung, siehe `temperature_limit`)."""
-    normalized = (health or "").upper()
+    normalized = "" if smart_unknown(health) else str(health).upper()
     if normalized and normalized not in ("PASSED", "OK"):
         return "SMART: " + (health or "?"), "danger"
     if life_left is not None and life_left < 10:

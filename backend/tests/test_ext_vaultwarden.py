@@ -188,7 +188,7 @@ async def test_a_running_vaultwarden_shows_version_https_and_closed_signups(clie
 
 
 @pytest.mark.asyncio
-async def test_http_open_signups_and_another_domain_are_warnings(client, db_session, test_settings):
+async def test_http_and_another_domain_are_warnings_signups_stay_neutral(client, db_session, test_settings):
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, "192.0.2.20:8222")
     fake.config["settings"]["disableUserRegistration"] = False
@@ -197,7 +197,20 @@ async def test_http_open_signups_and_another_domain_are_warnings(client, db_sess
         "http://192.0.2.20:8222", False, True, False,
     )
     rows = (await client.get("/api/v1/ext/vaultwarden/widgets/status", headers=headers)).json()["data"]
-    assert [(r["label"], r["tone"]) for r in rows] == [("läuft", "good"), ("ohne HTTPS", "warn"), ("offen", "warn")]
+    assert [(r["label"], r["tone"]) for r in rows] == [("läuft", "good"), ("ohne HTTPS", "warn"), ("prüfen", "neutral")]
+    # Das Feld bleibt auch mit SIGNUPS_ALLOWED=false auf false: die Zeile darf nicht „offen“ behaupten.
+    assert "SIGNUPS_ALLOWED" in rows[2]["subtitle"] and "Jeder" not in rows[2]["subtitle"]
+
+
+@pytest.mark.asyncio
+async def test_closed_signups_do_not_promise_invitations(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    # So antwortet Vaultwarden erst, wenn Registrierung und Einladungen aus sind.
+    fake.config["settings"]["disableUserRegistration"] = True
+    rows = (await client.get("/api/v1/ext/vaultwarden/widgets/status", headers=headers)).json()["data"]
+    assert (rows[2]["label"], rows[2]["tone"]) == ("zu", "good")
+    assert "Einladung" not in rows[2]["subtitle"]
 
 
 @pytest.mark.asyncio

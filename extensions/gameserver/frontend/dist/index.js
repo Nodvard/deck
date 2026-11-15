@@ -450,7 +450,7 @@ function ago(seconds) {
   return `vor ${Math.floor(seconds / 86400)} T`;
 }
 function size(bytes) {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1).replace(/\.0$/, "")} GB`;
   if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
   return `${Math.round(bytes / 1e3)} KB`;
 }
@@ -616,7 +616,7 @@ function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction
         Stat,
         {
           label: "Server-Prozess",
-          value: /* @__PURE__ */ jsx4("span", { className: "text-xl", children: d.process ? `${(d.process.ram_mb / 1024).toFixed(1)} GB` : "\u2013" }),
+          value: /* @__PURE__ */ jsx4("span", { className: "text-xl", children: d.process ? `${(d.process.ram_mb / 1024).toFixed(1).replace(/\.0$/, "")} GB` : "\u2013" }),
           sub: d.process ? `RAM \xB7 ${d.process.responding ? "reagiert" : "reagiert nicht"}` : unknown ? "nicht abrufbar" : "l\xE4uft nicht"
         }
       )

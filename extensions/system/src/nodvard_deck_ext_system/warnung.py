@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from nodvard_sdk import Notification, Severity
 
-from .sysinfo import _sections, parse_disks
+from .sysinfo import DF_CMD, _sections, parse_disks
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -36,16 +36,15 @@ CONFIRM_WITHIN_S = 2 * 3600
 TEMP_LIMIT_MIN, TEMP_LIMIT_MAX = 40, 110  # wie `warn_temp_c` im Schema
 _PARALLEL_HOSTS = 6  # Server, die gleichzeitig abgefragt werden
 
-# Netzlaufwerke (nfs, cifs, sshfs) fehlen mit Absicht: Ein hängendes Laufwerk würde `df` und damit die ganze Prüfung
-# blockieren. Dazu fehlen die üblichen Nicht-Platten (tmpfs, overlay, squashfs, devtmpfs, efivarfs, CD/DVD).
+# `DF_CMD` fragt keine Netzlaufwerke ab und hat eine Zeitgrenze, ein hängendes Laufwerk blockiert die Prüfung also nicht.
 WARN_SCRIPT = r"""echo @@disks
-df -P -T -x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs -x ramfs -x iso9660 -x udf -x nfs -x nfs4 -x cifs -x smb3 -x fuse.sshfs 2>/dev/null | tail -n +2
+{DF_CMD}
 echo @@thermal
 for z in /sys/class/thermal/thermal_zone*; do [ -r "$z/temp" ] || continue; echo "$(basename "$z")|$(cat "$z/type" 2>/dev/null)|$(cat "$z/temp" 2>/dev/null)"; done
 echo @@vcgencmd
 if command -v vcgencmd >/dev/null 2>&1; then vcgencmd measure_temp 2>/dev/null; fi
 echo @@end
-"""
+""".replace("{DF_CMD}", DF_CMD)
 
 _VCGENCMD_RE = re.compile(r"temp\s*=\s*(-?\d+(?:\.\d+)?)")
 
@@ -80,7 +79,8 @@ def parse_warn_output(text: str) -> dict[str, Any]:
     temps: list[dict[str, Any]] = []
     for line in s.get("thermal", []):
         parts = line.strip().split("|")
-        if len(parts) != 3 or not parts[2].strip().lstrip("-").isdigit():
+        raw = parts[2].strip().lstrip("-") if len(parts) == 3 else ""
+        if not (raw.isascii() and raw.isdigit()):
             continue
         celsius = int(parts[2]) / 1000  # Millgrad
         if _plausible(celsius):
@@ -91,7 +91,10 @@ def parse_warn_output(text: str) -> dict[str, Any]:
             if match and _plausible(float(match.group(1))):
                 temps.append({"sensor": "vcgencmd", "label": "Raspberry Pi", "celsius": round(float(match.group(1)), 1)})
                 break
-    return {"complete": "end" in s, "disks": disks, "temps": temps}
+    result: dict[str, Any] = {"complete": "end" in s, "disks": disks, "temps": temps}
+    if s.get("dfstatus"):
+        result["df_status"] = s["dfstatus"][0].strip()
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +170,7 @@ def _bytes(n: int) -> str:
     value = float(n)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if value < 1024 or unit == "TB":
-            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}".replace(".", ",")
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}".replace(".", ",").replace(",0 ", " ")
         value /= 1024
     return f"{n} B"
 
@@ -331,7 +334,11 @@ async def _read_host(ctx: "ExtensionContext", host: Any, sem: asyncio.Semaphore)
     if "@@end" not in result.stdout:
         ctx.logger.info("system-Warnungen: %s lieferte keine vollständige Antwort, übersprungen", host.name)
         return None
-    return parse_warn_output(result.stdout)
+    try:
+        return parse_warn_output(result.stdout)
+    except Exception as exc:  # noqa: BLE001 - verformte Ausgabe eines Servers darf die anderen nicht aufhalten
+        ctx.logger.warning("system-Warnungen: Ausgabe von %s nicht lesbar, übersprungen (%s)", host.name, type(exc).__name__)
+        return None
 
 
 async def run_warnungen(ctx: "ExtensionContext") -> dict[str, int]:
@@ -365,6 +372,8 @@ async def run_warnungen(ctx: "ExtensionContext") -> dict[str, int]:
             unreachable += 1
             continue
         name = host.display_name or host.name
+        if reading.get("df_status") not in (None, "ok"):
+            ctx.logger.warning("system-Warnungen: %s: Plattenbelegung nicht lesbar (%s), keine Platten-Prüfung", name, reading["df_status"])
         if disk_on:
             for disk in reading["disks"]:
                 sent += await _step(

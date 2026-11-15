@@ -8,7 +8,7 @@ import { styleRef } from "../../../_shared/frontend/src/csp";
 import { useEffect, useState } from "react";
 
 import { SettingsLink } from "../../../_shared/frontend/src/links";
-import { formatBytes, formatUptime } from "./format";
+import { dfFailedText, formatBytes, formatUptime } from "./format";
 import { TempLimit } from "./TempLimit";
 import { SystemQueryError } from "./systemQuery";
 
@@ -35,6 +35,9 @@ export interface LiveData {
     errors: number; drops: number; speed_mbps: number | null; state: string | null;
   }[];
   filesystems: { device: string; fstype: string; mount: string; size: number; used: number; available: number; percent: number }[];
+  network_mounts?: { fstype: string; mount: string; device: string }[];
+  df_status?: string | null;
+  df_failed?: boolean;
   processes: { pid: number; name: string; user: string | null; cpu_percent: number; mem_bytes: number }[];
   process_count: number;
   throttled: { raw: string; flags: string[] } | null;
@@ -401,6 +404,12 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
             ))}
           </tbody>
         </table>
+        {data.df_failed && <p className="mt-2 text-sm text-amber-300" data-testid="live-df-timeout">{dfFailedText(data.df_status)}</p>}
+        {(data.network_mounts?.length ?? 0) > 0 && (
+          <ul className="mt-2 text-xs opacity-70" data-testid="live-network-mounts">
+            {data.network_mounts?.map((m) => <li key={m.mount}>{m.mount} · {m.device} · {m.fstype}: Netzlaufwerk, Belegung nicht gemessen</li>)}
+          </ul>
+        )}
       </Section>
 
       <Section

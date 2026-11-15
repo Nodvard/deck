@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -90,6 +93,31 @@ def test_script_lists_running_services():
     from nodvard_deck_ext_system.sysinfo import SCRIPT
 
     assert "@@services" in SCRIPT and "--state=running" in SCRIPT
+
+
+# Antwortet wie apt auf einem deutsch eingestellten Debian 13: die Marke ist übersetzt, nur mit LC_ALL=C englisch.
+FAKE_APT = """#!/bin/sh
+if [ "$LC_ALL" = C ]; then echo "Listing..."; mark="upgradable from"; else echo "Auflistung…"; mark="aktualisierbar von"; fi
+echo "libssl3t64/stable-security 3.5.4-1~deb13u1 amd64 [$mark: 3.5.1-1+deb13u1]"
+echo "zfsutils-linux/stable 2.3.4-pve1 amd64 [$mark: 2.3.3-pve1]"
+"""
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="braucht eine POSIX-Shell")
+def test_updates_are_found_on_a_server_with_german_system_language(tmp_path):
+    from nodvard_deck_ext_system.sysinfo import SCRIPT
+
+    apt = tmp_path / "apt"
+    apt.write_bytes(FAKE_APT.encode("utf-8"))
+    apt.chmod(0o755)
+    line = next(part for part in SCRIPT.splitlines() if part.startswith("echo @@updates"))
+    env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}", "LANG": "de_DE.UTF-8", "LANGUAGE": "de"}
+    env.pop("LC_ALL", None)
+    done = subprocess.run([shutil.which("sh"), "-c", line], capture_output=True, text=True, timeout=30, check=True, env=env)
+    assert parse_system_info(done.stdout + "@@end\n")["updates"] == [
+        {"package": "libssl3t64", "security": True},
+        {"package": "zfsutils-linux", "security": False},
+    ]
 
 
 def test_missing_tools_leave_only_their_section_empty():
@@ -410,3 +438,85 @@ async def test_host_without_own_provider_gets_metrics_from_a_supporting_provider
     assert r.status_code == 200, r.text
     assert r.json()["values"] == {"cpu_percent": 12.5}
 
+
+
+DF_FINDINGS = [
+    ("timeout", "Plattenbelegung nicht gelesen: keine Antwort in der Zeitgrenze, wahrscheinlich hängt ein Laufwerk"),
+    ("failed", "Plattenbelegung konnte nicht gelesen werden"),
+    ("unavailable", "Plattenbelegung konnte auf dem Server nicht gemessen werden"),
+]
+
+
+def _df_output(status: str | None) -> str:
+    marker = f"@@dfstatus\n{status}\n" if status else ""
+    return f"@@os\nDebian\n@@disks\n{marker}@@netmounts\n@@reboot\nno\n@@end\n"
+
+
+@pytest.mark.parametrize(("status", "text"), DF_FINDINGS)
+def test_failed_disk_query_is_a_warning_not_all_clear(status, text):
+    from types import SimpleNamespace
+
+    from nodvard_deck_ext_system import widget_row
+
+    info = parse_system_info(_df_output(status))
+    info["findings"] = summary_findings(info)
+    assert info["findings"] == [{"tone": "warn", "text": text}]
+    row = widget_row(SimpleNamespace(id="h1", name="pve1", display_name="pve1"), info, None)
+    assert (row["summary"], row["tone"], row["badge"]) == (text, "warn", "1 Befund")
+
+
+@pytest.mark.parametrize("status", ["ok", None])
+def test_disk_query_that_worked_or_has_no_marker_is_no_finding(status):
+    assert summary_findings(parse_system_info(_df_output(status))) == []
+
+
+@pytest.mark.parametrize("status", ["ok", "timeout", "failed", "unavailable", None])
+def test_df_status_is_the_same_in_both_parsers(status):
+    from nodvard_deck_ext_system.live import parse_live
+
+    for parsed in (parse_system_info(_df_output(status)), parse_live(_df_output(status))):
+        assert parsed["df_status"] == status
+        assert parsed["df_failed"] is (status not in ("ok", None))
+
+
+@pytest.mark.asyncio
+async def test_widget_and_page_report_a_failed_disk_query(client, db_session, test_settings, monkeypatch):
+    from types import SimpleNamespace
+
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    await client.post("/api/v1/auth/bootstrap", json={"username": "owner1", "password": "correct-horse-battery", "setup_code": "TEST-CODE-2345"})
+    token = (await client.post("/api/v1/auth/login", json={"username": "owner1", "password": "correct-horse-battery"})).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    await extensions_service.discover_and_sync(db_session, test_settings)
+    assert (await client.post("/api/v1/extensions/system/enable", headers=headers)).status_code == 200
+    host = SimpleNamespace(
+        id="h-node", name="pve1", display_name="pve1", address="192.168.2.10", os_family="linux", has_credential=True,
+        kind="hypervisor", metadata={},
+    )
+    ctx = get_extension_runtime().loaded["system"].ctx
+
+    async def fake_list(*_args, **_kwargs):
+        return [host]
+
+    async def fake_get(*_args, **_kwargs):
+        return host
+
+    async def fake_run(host, command, timeout_s=60):
+        return SimpleNamespace(exit_code=0, stdout=_df_output("timeout"), stderr="", duration_ms=1)
+
+    monkeypatch.setattr(ctx.hosts, "list", fake_list)
+    monkeypatch.setattr(ctx.hosts, "get", fake_get)
+    monkeypatch.setattr(ctx.exec, "run", fake_run)
+    text = DF_FINDINGS[0][1]
+
+    res = await client.get("/api/v1/ext/system/widgets/health", headers=headers)
+    assert res.status_code == 200, res.text
+    assert [(r["summary"], r["tone"], r["badge"]) for r in res.json()["data"]] == [(text, "warn", "1 Befund")]
+
+    res = await client.get("/api/v1/ext/system/hosts/h-node/info", headers=headers)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert (body["df_status"], body["df_failed"], body["disks"]) == ("timeout", True, [])
+    assert body["findings"] == [{"tone": "warn", "text": text}]

@@ -388,13 +388,17 @@ class Extension(NodvardExtension):
             host = await _full_docker_host(host_id)
             df = await ctx.exec.run(host, commands.system_df(), timeout_s=60)
             images = await ctx.exec.run(host, commands.images(), timeout_s=30)
+            dangling = await ctx.exec.run(host, commands.dangling_images(), timeout_s=30)
             if df.exit_code != 0:
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error_message(
                     RuntimeError(df.stderr), "Speicherbelegung konnte nicht geladen werden.",
                 ))
             return {
                 "disk": parse_system_df(df.stdout),
-                "images": parse_images(images.stdout) if images.exit_code == 0 else [],
+                "images": (
+                    parse_images(images.stdout, dangling.stdout if dangling.exit_code == 0 else "")
+                    if images.exit_code == 0 else []
+                ),
             }
 
         @logs_router.get(

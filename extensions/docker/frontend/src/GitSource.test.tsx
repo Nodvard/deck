@@ -238,7 +238,7 @@ describe("Stack aus Git", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Holen und ansehen" }));
     fireEvent.click(await screen.findByRole("checkbox", { name: /Volumes vorher sichern/ }));
     expect(await screen.findByText(/web steht dafür still, bis Compose den Stack anwendet/)).toBeTruthy();
-    expect(screen.getByRole("checkbox", { name: /shop_data: 2(,|\.)0 GB/ })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: /shop_data: 2 GB/ })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Einspielen" }));
     await waitFor(() => expect(requests.some((r) => r.url.endsWith("/git/apply"))).toBe(true));
     const question = String((window.__nodvardDeck.confirmDialog as Mock).mock.calls[0][0]);

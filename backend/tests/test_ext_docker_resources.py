@@ -186,6 +186,36 @@ def test_a_comma_in_a_label_does_not_make_a_named_volume_anonymous():
     assert next(v for v in _res().parse_volumes(df) if v["name"] == "leer")["anonymous"] is False
 
 
+DIGEST_ONLY = "sha256:" + "d" * 64
+ORPHAN = "sha256:" + "c" * 64
+
+
+def _df_with_unnamed():
+    df = copy.deepcopy(DF)
+    for image_id in (DIGEST_ONLY, ORPHAN):
+        df["Images"].append({**df["Images"][0], "ID": image_id, "Repository": "<none>", "Tag": "<none>", "Containers": "0"})
+    return df
+
+
+def _image_list():
+    row = {"Containers": "0", "Digest": "", "Size": "159MB", "SharedSize": "N/A", "UniqueSize": "N/A"}
+    rows = [
+        {**row, "ID": DIGEST_ONLY, "Repository": "registry.example/scanner", "Tag": "<none>"},
+        {**row, "ID": BUSYBOX, "Repository": "busybox", "Tag": "1.37"},
+        {**row, "ID": "sha256:" + "e" * 64, "Repository": "<none>", "Tag": "<none>"},
+    ]
+    return "\n".join(["kein json", "5", *(json.dumps(r) for r in rows)]) + "\n"
+
+
+def test_an_image_pulled_by_digest_keeps_its_repository_and_is_not_dangling():
+    names = _res().parse_image_names(_image_list())
+    assert names == {DIGEST_ONLY: ["registry.example/scanner"], BUSYBOX: ["busybox:1.37"]}
+    images = {i["id"]: i for i in _res().parse_images(_df_with_unnamed(), names)}
+    assert (images[DIGEST_ONLY]["names"], images[DIGEST_ONLY]["dangling"]) == (["registry.example/scanner"], False)
+    assert (images[ORPHAN]["names"], images[ORPHAN]["dangling"]) == ([], True)
+    assert images[BUSYBOX]["names"] == ["busybox:1.37"]
+
+
 def test_unreadable_or_odd_rows_are_left_out():
     df = {"Images": ["x", {"ID": ""}], "Volumes": [{"Name": "-x"}, {"Name": "a b"}, 5], "Containers": ["y"]}
     lines = "\n".join(["kein json", "5", json.dumps({"ID": "abc", "Name": "x"}), json.dumps({"ID": "f" * 64, "Name": ""})])
@@ -213,6 +243,33 @@ async def test_the_three_lists_share_one_reading_for_a_while():
     await resources.snapshot(HOST)
     assert len(ctx.exec.calls) == 4
     assert {n["name"] for n in first.networks} >= {"testnetz", "ungenutzt"} and first.network_error is None
+
+
+@pytest.mark.asyncio
+async def test_names_are_looked_up_only_for_images_without_repository():
+    from nodvard_deck_ext_docker import commands
+
+    ctx = _ctx({
+        commands.system_df_verbose(): _result(json.dumps(_df_with_unnamed())), commands.image_names(): _result(_image_list()),
+    })
+    snapshot = await _res().DockerResources(ctx).snapshot(HOST)
+    assert ctx.exec.calls[-1] == commands.image_names() and len(ctx.exec.calls) == 3
+    assert [i["id"] for i in snapshot.images if i["dangling"]] == [ORPHAN]
+
+    ctx = _ctx()
+    await _res().DockerResources(ctx).snapshot(HOST)
+    assert commands.image_names() not in ctx.exec.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", [_result(stderr="boom\n", code=1), OSError("Verbindung abgebrochen")])
+async def test_a_failed_name_lookup_keeps_the_lists(answer):
+    from nodvard_deck_ext_docker import commands
+
+    ctx = _ctx({commands.system_df_verbose(): _result(json.dumps(_df_with_unnamed())), commands.image_names(): answer})
+    snapshot = await _res().DockerResources(ctx).snapshot(HOST)
+    assert len(snapshot.images) == 4 and snapshot.volumes
+    assert sorted(i["id"] for i in snapshot.images if i["dangling"]) == [ORPHAN, DIGEST_ONLY]
 
 
 @pytest.mark.asyncio

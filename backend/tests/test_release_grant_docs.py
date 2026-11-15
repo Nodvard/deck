@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,7 @@ def test_release_summary_covers_host_keys_and_update_states():
 def test_redirect_protection_is_documented_after_0120():
     text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     section = text.split("## [0.12.0]", 1)[0]
-    assert "ghcr.io" in section
+    assert "ghcr.io" in re.findall(r"[\w.-]+", section)
     assert "redirects" in section
 
 

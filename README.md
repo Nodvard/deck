@@ -88,7 +88,7 @@ Die Bilder zeigen Beispieldaten. Klicke auf ein Bild für die vergrößerte Ansi
 
 | Erweiterung | Was sie macht |
 |---|---|
-| Gameserver (Beta) | Gameserver starten/stoppen und aktuellen Beitrittscode anzeigen (z. B. Valheim) |
+| Gameserver (Beta) | Gameserver starten/stoppen und aktuellen Beitrittscode anzeigen (bisher nur Valheim als Windows-Dienst) |
 | Dokumente | Dokumentenarchiv mit Texterkennung (OCR) und Volltextsuche |
 | Inventar | Geräte und Gegenstände mit Kaufdaten und Garantie-Erinnerung |
 | Nextcloud | Nextcloud als Quelle im Dateimanager, dazu eine Kachel mit Version, Updates, freiem Speicher, aktiven Nutzern und Last |

@@ -216,6 +216,15 @@ async def _twice(ctx: FakeCtx, clock: dict[str, float]) -> None:
 
 
 @pytest.mark.asyncio
+async def test_unreadable_disks_are_logged_not_silent(tmp_path, clock, caplog):
+    ctx = FakeCtx(tmp_path, [_host("h-ki", "ki-server")], {"h-ki": "@@disks\n@@dfstatus\ntimeout\n@@thermal\n@@vcgencmd\n@@end\n"})
+    with caplog.at_level(logging.WARNING, logger="test-system-warnung"):
+        await run_warnungen(ctx)
+    assert ctx.sent == []
+    assert "Plattenbelegung nicht lesbar (timeout)" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_disk_warning_message_severity_and_path(tmp_path, clock):
     ctx = FakeCtx(tmp_path, [_host("h-ki", "ki-server")], {"h-ki": KI_HOST})
     result = await run_warnungen(ctx)
@@ -880,3 +889,33 @@ async def test_saving_the_same_limit_again_writes_no_audit_entry(client, db_sess
     assert (await client.put(limit_api.url, json={"own_c": None}, headers=limit_api.headers)).status_code == 200
     assert (await client.put(limit_api.url, json={"own_c": None}, headers=limit_api.headers)).status_code == 200
     assert len(await _limit_audit(db_session)) == 2
+
+
+def test_bytes_ganze_werte_ohne_nachkommastelle():
+    assert warnung._bytes(608 * 1024**3) == "608 GB"
+    assert warnung._bytes(int(3.6 * 1024**3)) == "3,6 GB"
+
+
+def test_parse_skips_malformed_df_and_thermal_lines():
+    text = (
+        "@@disks\n/dev/a ext4 1000 x 500 50% /a\n/dev/b ext4 1000 ²00 500 50% /b\n/dev/c ext4 1000 500 500 50% /c\n"
+        "@@thermal\nz|t|²\nz1|t|45000\n@@vcgencmd\n@@end\n"
+    )
+    parsed = parse_warn_output(text)
+    assert [d["mount"] for d in parsed["disks"]] == ["/c"]
+    assert [t["celsius"] for t in parsed["temps"]] == [45.0]
+
+
+@pytest.mark.asyncio
+async def test_host_with_garbage_does_not_stop_the_others(tmp_path, clock, monkeypatch):
+    real = warnung.parse_warn_output
+
+    def parse(text):
+        if "boom" in text:
+            raise ValueError("kaputt")
+        return real(text)
+
+    monkeypatch.setattr(warnung, "parse_warn_output", parse)
+    ctx = FakeCtx(tmp_path, [_host("a", "alpha"), _host("b", "beta")], {"a": "boom\n@@end\n", "b": _disk_output(91)})
+    result = await run_warnungen(ctx)
+    assert result["unreachable"] == 1 and ctx.titles() == ["Speicher fast voll: /var auf beta bei 91 %"]

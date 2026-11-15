@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import secrets
 from http import HTTPStatus
@@ -11,6 +12,9 @@ from nodvard_sdk import ActionRequest, ActionResult, ActionSpec, Actor, DryRunRe
 from pydantic import BaseModel
 
 from . import antivirus as av
+from .ids import LOGGER
+
+log = logging.getLogger(f"{LOGGER}.ssh_hardening")
 
 ACTION = "shield.ssh_hardening"
 VERSION = 26
@@ -24,6 +28,9 @@ PASSWORD_LOGIN = ("Deck meldet sich an diesem Server noch mit Passwort an und w�
                   "Bitte unter Einstellungen → Server & Zugänge zuerst den Schlüssel als Standard setzen.")
 TWO_FACTOR = ("Dieser Server verlangt beim SSH-Login einen zweiten Faktor (PAM oder AuthenticationMethods). "
               "Die Härtung würde Schlüssel plus Code brechen und wird deshalb nicht angeboten.")
+UNCONFIRMED = "Das SSH-Hilfsskript konnte den Schritt nicht bestätigen."
+IN_LOG = "Einzelheiten stehen im Container-Protokoll von Nodvard Deck."
+STATE_FAILED = f"Der SSH-Zustand ließ sich nicht prüfen. {IN_LOG}"
 LABELS = {"on": "SSH härten", "off": "Härtung zurücknehmen", "add-key": "Deck-Schlüssel eintragen"}
 SPEC = ActionSpec(action_type=ACTION, label="SSH-Härtung", default_risk=Risk.HIGH,
                   permissions=["hosts.execute"], host_bound=False, command_field="command",
@@ -58,23 +65,40 @@ def build(payload: dict) -> str:
     return command(mode, username)
 
 
-async def checked(deck_ssh, cmd: str, marker: str | None = None) -> str:
-    result = await deck_ssh.run(cmd)
+class HelperProblem(ValueError):
+    """Das Hilfsskript hat abgelehnt; `shown` ist der Text für die Oberfläche, ohne Ausgabe des Servers."""
+
+    def __init__(self, message: str, *, shown: str) -> None:
+        super().__init__(message)
+        self.shown = shown
+
+
+async def checked(deck_ssh, cmd: str, marker: str | None = None, *, use: av.HelperUse | None = None,
+                  read: tuple[str, ...] | None = None) -> str:
+    result = await deck_ssh.run(cmd) if use is None else await use.call(deck_ssh.run, cmd, read)
     out = result.stdout or ""
     if av.NO_ROOT in out:
-        raise ValueError(av.no_root_message(out))
+        message = av.no_root_message(out)
+        raise HelperProblem(message, shown=message)
     if result.exit_code != 0 or (marker and marker not in out.splitlines()):
-        raise ValueError("Das SSH-Hilfsskript konnte den Schritt nicht bestätigen. " + (result.stderr or out).strip()[-1000:])
+        raise HelperProblem(f"{UNCONFIRMED} " + (result.stderr or out).strip()[-1000:],
+                            shown=f"{UNCONFIRMED} {IN_LOG}")
     return out
 
 
-async def inspect(deck_ssh) -> dict:
+async def inspect(deck_ssh, use: av.HelperUse | None = None) -> dict:
+    """Liest den Zustand. Ohne `use` legt das nie etwas auf dem Server ab."""
     key = deck_ssh.key_public_key
-    out = await checked(deck_ssh, command("status", deck_ssh.username, *(key.split() if key else [])))
+    use = use or av.HelperUse(root=deck_ssh.username == "root")
+    args = ("ssh-hardening", "status", deck_ssh.username, *(key.split() if key else []))
+    out = await checked(deck_ssh, command(*args[1:]), use=use, read=args)
+    warning = ROOT_WARNING if deck_ssh.username == "root" else None
+    if warning and use.missing and not use.installed:
+        warning += " " + av.HELPER_LATER_NOTE
     return {"has_key": bool(key), "authorized": "@@authorized=yes" in out.splitlines(),
             "hardened": "@@hardened=yes" in out.splitlines(), "managed": "@@managed=yes" in out.splitlines(),
-            "root": deck_ssh.username == "root", "warning": ROOT_WARNING if deck_ssh.username == "root" else None,
-            "root_keys": "@@root_keys=yes" in out.splitlines(),
+            "root": deck_ssh.username == "root", "warning": warning,
+            "helper_missing": use.missing and not use.installed, "root_keys": "@@root_keys=yes" in out.splitlines(),
             "two_factor": "@@two_factor=yes" in out.splitlines(), "unconfirmed": "@@unconfirmed=yes" in out.splitlines(),
             "login_has_key": bool(deck_ssh.public_key), "credential_id": deck_ssh.credential_id,
             "key_credential_id": deck_ssh.key_credential_id}
@@ -103,16 +127,18 @@ class SshHardening:
 
     async def execute(self, req: ActionRequest) -> ActionResult:
         async with self._locks.setdefault(req.host_ref or "", asyncio.Lock()):
+            use = av.HelperUse(install=True)
             try:
-                result = await self._execute(req)
+                result = await self._execute(req, use)
             except Exception:
                 result = ActionResult(success=False, error="Der SSH-Zugang konnte nicht geprüft werden.")
+            detail = {"mode": req.payload.get("mode"), **({"helper_installed": True} if use.installed else {})}
             await self._ctx.audit.log(action=ACTION, outcome="success" if result.success else "failure",
                                       target_type="host", target_id=req.host_ref, actor=req.proposed_by,
-                                      reason=result.error or req.reason, detail={"mode": req.payload.get("mode")})
+                                      reason=result.error or req.reason, detail=detail)
             return result
 
-    async def _execute(self, req: ActionRequest) -> ActionResult:
+    async def _execute(self, req: ActionRequest, use: av.HelperUse) -> ActionResult:
         try:
             cmd = build(req.payload)
             if req.payload.get("command") != cmd:
@@ -128,12 +154,13 @@ class SshHardening:
                            for key in ("credential_id", "key_credential_id"))
                     or ("login_public_key" in req.payload and deck_ssh.public_key != req.payload["login_public_key"])):
                     raise ValueError("Der SSH-Zugang hat sich geändert. Bitte neu auslösen.")
+                use.root = deck_ssh.username == "root"
                 if mode == "off":
-                    await checked(deck_ssh, cmd, "@@hardened=no")
+                    await checked(deck_ssh, cmd, "@@hardened=no", use=use)
                 elif mode == "add-key":
-                    await checked(deck_ssh, cmd, "@@authorized=yes")
+                    await checked(deck_ssh, cmd, "@@authorized=yes", use=use)
                 else:
-                    state = await inspect(deck_ssh)
+                    state = await inspect(deck_ssh, use)
                     if not state["has_key"]:
                         raise ValueError(NO_KEY)
                     if not state["authorized"]:
@@ -181,9 +208,11 @@ class SshHardening:
                     try:
                         return await inspect(deck_ssh)
                     except ValueError as exc:
+                        log.warning("ssh_hardening_state_failed host=%r error=%r", host_id, str(exc)[:1000])
                         return {"has_key": bool(deck_ssh.key_public_key), "authorized": False, "hardened": None,
                                 "managed": False, "root": deck_ssh.username == "root",
-                                "warning": ROOT_WARNING if deck_ssh.username == "root" else None, "error": str(exc),
+                                "warning": ROOT_WARNING if deck_ssh.username == "root" else None,
+                                "error": exc.shown if isinstance(exc, HelperProblem) else STATE_FAILED,
                                 "root_keys": False, "two_factor": False, "unconfirmed": False,
                                 "login_has_key": bool(deck_ssh.public_key), "credential_id": deck_ssh.credential_id,
                                 "key_credential_id": deck_ssh.key_credential_id}
@@ -227,6 +256,8 @@ class SshHardening:
                         reason += " " + ROOT_WARNING
                     elif current is not None and current["root_keys"]:
                         reason += " " + ROOT_KEYS_NOTE
+                    if deck_ssh.username == "root":
+                        reason += " " + av.HELPER_INSTALL_NOTE
                 decision = await self._ctx.actions.propose(ActionRequest(
                     action_type=ACTION, host_ref=host.id, payload=fields, risk=Risk.HIGH, proposed_by=actor, reason=reason,
                 ))

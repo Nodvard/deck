@@ -396,3 +396,97 @@ def test_unhandled_server_errors_also_get_the_headers(
     assert response.headers.get_list("strict-transport-security") == (
         ["max-age=31536000"] if scheme == "https" else []
     )
+
+
+HSTS = b"strict-transport-security"
+
+
+def _hsts(headers) -> list[bytes]:
+    return [value for name, value in headers if name.lower() == HSTS]
+
+
+def test_hsts_is_sent_once_over_https_while_the_switch_is_on():
+    assert _hsts(secure_headers([], https=True)) == [b"max-age=31536000"]
+    assert _hsts(secure_headers([], https=True, hsts=True)) == [b"max-age=31536000"]
+
+
+def test_hsts_is_missing_when_switched_off():
+    assert _hsts(secure_headers([], https=True, hsts=False)) == []
+
+
+@pytest.mark.parametrize("hsts", [False, True])
+def test_hsts_stays_away_without_https(hsts):
+    assert _hsts(secure_headers([], https=False, hsts=hsts)) == []
+
+
+def test_a_route_cannot_bring_hsts_back_when_switched_off():
+    headers = secure_headers([(b"Strict-Transport-Security", b"max-age=31536000")], https=True, hsts=False)
+    assert _hsts(headers) == []
+
+
+@pytest.mark.parametrize(("options", "expected"), [
+    ({}, ["max-age=31536000"]),
+    ({"hsts": True}, ["max-age=31536000"]),
+    ({"hsts": False}, []),
+])
+def test_the_middleware_passes_the_hsts_switch_on(options, expected):
+    app = FastAPI()
+
+    @app.get("/")
+    async def index() -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    app.add_middleware(SecurityHeadersMiddleware, **options)
+    assert TestClient(app).get("https://deck.local/").headers.get_list("strict-transport-security") == expected
+    assert TestClient(app).get("http://deck.local/").headers.get_list("strict-transport-security") == []
+
+
+def test_hsts_is_on_by_default_and_follows_the_environment(monkeypatch):
+    from nodvard_deck.config import Settings
+
+    monkeypatch.delenv("NODVARD_DECK_HSTS", raising=False)
+    assert Settings(_env_file=None).hsts is True
+    monkeypatch.setenv("NODVARD_DECK_HSTS", "false")
+    assert Settings(_env_file=None).hsts is False
+
+
+@pytest.mark.parametrize(("hsts", "expected"), [(True, ["max-age=31536000"]), (False, [])])
+def test_the_app_applies_the_hsts_setting(tmp_path, test_settings, monkeypatch, hsts, expected):
+    from nodvard_deck import config
+    from nodvard_deck.main import create_app
+
+    test_settings.data_dir = tmp_path / "data"
+    test_settings.frontend_dist = tmp_path / "frontend" / "dist"
+    test_settings.hsts = hsts
+    monkeypatch.setattr(config, "_settings", test_settings)
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    response = client.get("https://deck.local/api/v1/gibt-es-nicht")
+    assert response.headers.get_list("strict-transport-security") == expected
+    _assert_fixed_headers(response.headers)
+    assert client.get("http://deck.local/api/v1/gibt-es-nicht").headers.get_list("strict-transport-security") == []
+
+
+@pytest.mark.parametrize(("filename", "note"), [
+    ("docs/12-REVERSE-PROXY.md", "`NODVARD_DECK_HSTS=false` schaltet die Kopfzeile ab"),
+    ("docs/en/REVERSE-PROXY.md", "`NODVARD_DECK_HSTS=false` turns the header off"),
+])
+def test_proxy_docs_name_the_hsts_switch(filename, note):
+    text = " ".join((Path(__file__).resolve().parents[2] / filename).read_text(encoding="utf-8").split())
+    assert note in text
+
+
+RESCUE_NOTES = {
+    "docs/12-REVERSE-PROXY.md":
+        "Der Schalter gilt auch für die Notseite, die nach einem gescheiterten Start statt der Oberfläche läuft.",
+    "docs/en/REVERSE-PROXY.md":
+        "The switch also applies to the rescue page, which runs instead of the interface after a failed start.",
+}
+
+
+@pytest.mark.parametrize(("filename", "note"), RESCUE_NOTES.items())
+def test_proxy_docs_say_the_hsts_switch_covers_the_rescue_page(filename, note):
+    from nodvard_deck.rescue import hsts_enabled
+
+    assert hsts_enabled({"NODVARD_DECK_HSTS": "false"}) is False
+    text = " ".join((Path(__file__).resolve().parents[2] / filename).read_text(encoding="utf-8").split())
+    assert note in text

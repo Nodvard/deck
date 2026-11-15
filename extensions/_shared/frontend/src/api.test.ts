@@ -309,10 +309,16 @@ describe("formatBytes", () => {
     expect(formatBytes(8.5 * 1024 ** 3)).toBe("8.5 GB");
     expect(formatBytes(93 * 1024 ** 3)).toBe("93 GB");
   });
-  it("fixed zeigt immer eine Nachkommastelle", () => {
+  it("ganze Werte ohne Nachkommastelle, gebrochene mit einer", () => {
+    expect(formatBytes(608 * 1024 ** 3, { fixed: true })).toBe("608 GB");
+    expect(formatBytes(3.6 * 1024 ** 3, { fixed: true })).toBe("3.6 GB");
+    expect(formatBytes(1.2 * 1024 ** 4, { fixed: true })).toBe("1.2 TB");
+    expect(formatBytes(4 * 1024 ** 3)).toBe("4 GB");
+  });
+  it("fixed zeigt gebrochene Werte mit einer Nachkommastelle", () => {
     expect(formatBytes(0, { fixed: true })).toBe("0 B");
-    expect(formatBytes(2 * 1024 ** 3, { fixed: true })).toBe("2.0 GB");
-    expect(formatBytes(45 * 1024 ** 3, { fixed: true })).toBe("45.0 GB");
+    expect(formatBytes(2 * 1024 ** 3, { fixed: true })).toBe("2 GB");
+    expect(formatBytes(45 * 1024 ** 3, { fixed: true })).toBe("45 GB");
   });
 });
 

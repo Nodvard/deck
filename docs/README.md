@@ -22,9 +22,9 @@
 | [en/PROXMOX-TOKEN.md](en/PROXMOX-TOKEN.md) · [Deutsch](10-PROXMOX-TOKEN.md) | Creating a Proxmox API token with limited rights |
 | [en/REVERSE-PROXY.md](en/REVERSE-PROXY.md) · [Deutsch](12-REVERSE-PROXY.md) | Running Nodvard Deck behind Nginx Proxy Manager, Traefik or Caddy: trusted proxy, HTTPS, real client addresses |
 | [en/TAILSCALE.md](en/TAILSCALE.md) · [Deutsch](13-TAILSCALE.md) | Connecting servers through Tailscale: installation, Docker connectivity, SSH access and troubleshooting |
-| [en/release-notes/0.13.0.md](en/release-notes/0.13.0.md) · [Deutsch](release-notes/0.13.0.md) | Release notes 0.13.0; also [0.12.1](en/release-notes/0.12.1.md) and [0.12.0](en/release-notes/0.12.0.md) |
-| [FEHLERSUCHE.md](FEHLERSUCHE.md) | Fehlersuche: Die 20 häufigsten Probleme bei Erst-Einrichtung und Betrieb |
-| [en/TROUBLESHOOTING.md](en/TROUBLESHOOTING.md) | Troubleshooting: 20 frequent problems during setup and operation |
+| [en/release-notes/0.14.1.md](en/release-notes/0.14.1.md) · [Deutsch](release-notes/0.14.1.md) | Release notes 0.14.1; also [0.14.0](en/release-notes/0.14.0.md), [0.13.0](en/release-notes/0.13.0.md), [0.12.1](en/release-notes/0.12.1.md) and [0.12.0](en/release-notes/0.12.0.md) |
+| [FEHLERSUCHE.md](FEHLERSUCHE.md) | Fehlersuche: Die 19 häufigsten Probleme bei Erst-Einrichtung und Betrieb |
+| [en/TROUBLESHOOTING.md](en/TROUBLESHOOTING.md) | Troubleshooting: 19 frequent problems during setup and operation |
 | [../deploy/README.md](../deploy/README.md) | Building the image, deployment, backup and restore, demo mode |
 | [../SECURITY.md](../SECURITY.md) | Reporting vulnerabilities, hardening notes |
 | [en/SBOM.md](en/SBOM.md) · [Deutsch](BAUSTEINLISTE.md) | Reading component lists, comparing image digests and verifying release provenance |

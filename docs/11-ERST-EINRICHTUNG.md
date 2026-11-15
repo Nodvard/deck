@@ -828,7 +828,8 @@ Schreibbar bleiben der Datenordner, `/tmp` und ausdrücklich eingebundene Ziele 
 Serverzugriffe laufen über SSH (`backend/src/nodvard_deck/core/ssh.py`), OCR als normaler Prozess. Es gibt keine
 Spracheingabe im Frontend; Kamera, Mikrofon und Standort bleiben im Browser gesperrt. HSTS wird nur bei erkanntem
 HTTPS gesetzt. Proxy-Angaben zählen nur von einem eingetragenen vertrauenswürdigen Proxy. Über HTTP bleibt die
-Warnung vor unverschlüsseltem Zugriff bestehen. Die Notseite sendet HSTS immer; Browser beachten es nur über HTTPS.
+Warnung vor unverschlüsseltem Zugriff bestehen.
+Die Notseite sendet HSTS immer, außer mit `NODVARD_DECK_HSTS=false`; Browser beachten es nur über HTTPS.
 CORP `same-origin` gilt für API-Antworten. Ausgenommen ist `/api/v1/health` mit CORP `cross-origin`, damit Startseiten
 wie Homarr oder Homepage den Zustand von Deck direkt aus dem Browser abfragen können.
 Öffentliche Logos, Favicons und App-Symbole erhalten bei GET/HEAD CORP `cross-origin` und können auf fremden Webseiten
@@ -1546,8 +1547,9 @@ Jeder Bericht hält den damaligen Stand je Server fest: offene Updates und Siche
 Virenscan-Ergebnis, die zuletzt gespeicherten Fail2ban-Sperren, den letzten erfolgreichen Lynis-Härtungswert sowie
 neue und erledigte Schadsoftware-Funde im Berichtszeitraum. Fehlende Ergebnisse stehen als unbekannt im Bericht.
 Shield liest dafür nur seine gespeicherten Daten und startet weder neue Scans noch Server-Abfragen.
-Zertifikatsabläufe sind bisher nicht in Shield gespeichert; dafür steht ausdrücklich „Keine gespeicherten
-Zertifikatsdaten“ im Bericht. Daraus folgt keine Aussage, ob Zertifikate bald ablaufen.
+Zertifikate, die in den nächsten 30 Tagen ablaufen, stammen aus der letzten Außenprüfung des Servers, mit deren
+Zeitpunkt; die Restlaufzeit rechnet der Bericht ab seinem Erstellzeitpunkt. Ohne Außenprüfung steht „Keine gespeicherten
+Zertifikatsdaten“ im Bericht, daraus folgt keine Aussage, ob Zertifikate bald ablaufen.
 
 Über deine vorhandenen Meldungskanäle kommt eine Kurzfassung mit Link zum vollständigen Bericht.
 Ein alter Bericht verändert sich nicht, wenn später neue Ergebnisse eingehen. Vor dem ersten geplanten Lauf ist der
