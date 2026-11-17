@@ -2487,27 +2487,33 @@ async def test_a_job_for_several_guests_counts_its_run_for_each_guest(client, db
 
 
 @pytest.mark.asyncio
-async def test_retry_of_a_group_job_without_node_uses_the_guests_node(client, db_session, test_settings, mock_backup_api):
-    """Job fuer mehrere Gaeste mit Knoten "-- Alle --" (PVE-Standard). Die Seite
-    zeigte den Knoten, "Erneut versuchen" endete aber mit "Kein Proxmox-Knoten bekannt" --
-    die Sammel-Aufgabe hat keine Gast-ID. Der Knoten kommt jetzt vom Gast selbst, sonst
-    aus den Laeufen des Jobs."""
+@pytest.mark.parametrize("lines, status", [
+    ([], "job_error"),
+    (["ERROR: Backup of VM 100 failed - write error - Broken pipe"], "failed"),
+])
+async def test_retry_of_a_group_job_without_node_uses_the_guests_node(
+    client, db_session, test_settings, mock_backup_api, lines, status,
+):
+    """Wiederholungen nutzen den Gastknoten, sonst den Knoten des Sammellaufs."""
     base_url, state = mock_backup_api
+    upid = "UPID:pve2:0001A2B4:00C0FFEF:6703F1A1:vzdump::root@pam:"
     state["jobs"] = [{"id": "backup-multi", "vmid": "100,104,300", "storage": "backup-pi", "schedule": "01:30", "enabled": 1}]
-    state["tasks"] = [{"upid": "UPID:pve2:7", "node": "pve2", "type": "vzdump", "id": "", "status": "job errors", "starttime": 5000, "endtime": 5600}]
+    state["tasks"] = [{"upid": upid, "node": "pve2", "type": "vzdump", "id": "", "status": "job errors", "starttime": 5000, "endtime": 5600}]
+    state["logs"] = {upid: lines}
     token = await _setup_backups(client, db_session, test_settings, base_url)
     headers = _auth_header(token)
     rows = {j["vmid"]: j for j in (await client.get("/api/v1/ext/backups/jobs", headers=headers)).json()}
-    assert (rows["100"]["last_status"], rows["100"]["node"]) == ("failed", "pve2")
+    assert (rows["100"]["last_status"], rows["100"]["node"]) == (status, "pve2")
+    assert rows["104"]["last_status"] == rows["300"]["last_status"] == "job_error"
 
-    # 104 liegt laut /cluster/resources auf pve1, 300 kennt Proxmox dort nicht (mehr):
-    # dann zaehlt der Knoten der letzten Sammel-Aufgabe.
+    # Gast 104 liegt auf pve1, für den unbekannten Gast 300 zählt der letzte Sammellauf.
     for vmid in ("100", "104", "300"):
         retry = await client.post(f"/api/v1/ext/backups/jobs/{rows[vmid]['job_ref']}/retry", headers=headers)
         assert retry.status_code == 200, retry.text
         approve = await client.post(f"/api/v1/actions/{retry.json()['action_id']}/approve", headers=headers)
         assert approve.json()["status"] == "succeeded", approve.text
     assert state["vzdump_calls"] == [{"node": "pve2"}, {"node": "pve1"}, {"node": "pve2"}]
+    assert [params["vmid"] for params in state["vzdump_params"]] == ["100", "104", "300"]
 
 
 @pytest.mark.asyncio

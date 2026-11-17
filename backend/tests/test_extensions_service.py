@@ -8,6 +8,7 @@ haette den eigentlichen Code nie ausgefuehrt.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import shutil
 import sys
@@ -797,3 +798,114 @@ async def test_switching_on_and_off_does_not_run_in_the_admins_name(tmp_path, db
     assert sys.modules["nodvard_deck_ext_seen"].SEEN == [
         ("setup", False), ("task", False), ("start", False), ("stop", False),
     ]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_enable_starts_the_extension_once(tmp_path, file_db, test_settings):
+    ext_dir = _write_simple_extension(tmp_path)
+    module = ext_dir / "src" / "nodvard_deck_ext_gone" / "__init__.py"
+    log = tmp_path / "calls.log"
+    module.write_text(
+        "import asyncio\n"
+        "class Extension:\n"
+        "    async def setup(self, ctx):\n"
+        "        pass\n"
+        "    async def on_start(self, ctx):\n"
+        "        await asyncio.sleep(0.05)\n"
+        f"        open({str(log)!r}, 'a').write('start\\n')\n"
+        "    async def on_stop(self, ctx):\n"
+        f"        open({str(log)!r}, 'a').write('stop\\n')\n",
+        encoding="utf-8",
+    )
+    settings = test_settings.model_copy(update={"extensions_dir": tmp_path / "extensions"})
+    app = FastAPI()
+    app.state.ext_mount_index = len(app.router.routes)
+    async with file_db() as session:
+        await extensions_service.discover_and_sync(session, settings)
+        await session.commit()
+
+    async def enable() -> None:
+        async with file_db() as session:
+            await extensions_service.enable_extension(app, session, settings, "gone-ext")
+
+    await asyncio.gather(enable(), enable())
+    assert log.read_text().splitlines() == ["start"]
+
+    async with file_db() as session:
+        await extensions_service.disable_extension(app, session, "gone-ext")
+    assert log.read_text().splitlines() == ["start", "stop"]
+    assert "gone-ext" not in get_extension_runtime().loaded
+
+
+@pytest.mark.asyncio
+async def test_disable_after_a_concurrent_enable_saves_disabled(tmp_path, file_db, test_settings):
+    _write_simple_extension(tmp_path)
+    settings = test_settings.model_copy(update={"extensions_dir": tmp_path / "extensions"})
+    app = FastAPI()
+    app.state.ext_mount_index = len(app.router.routes)
+    async with file_db() as first:
+        await extensions_service.discover_and_sync(first, settings)
+        await first.commit()
+
+    async with file_db() as disabler, file_db() as enabler:
+        stale = await extensions_service.get_record(disabler, "gone-ext")  # lädt state=disabled vor dem Einschalten
+        assert stale.state == "disabled"
+        await extensions_service.enable_extension(app, enabler, settings, "gone-ext")
+        await enabler.commit()
+
+        await extensions_service.disable_extension(app, disabler, "gone-ext")
+        await disabler.commit()
+
+    async with file_db() as check:
+        assert (await extensions_service.get_record(check, "gone-ext")).state == "disabled"
+    assert "gone-ext" not in get_extension_runtime().loaded
+
+
+@pytest.mark.asyncio
+async def test_enable_commits_before_releasing_the_lock(tmp_path, file_db, test_settings):
+    started = tmp_path / "started.flag"
+    ext_dir = _write_simple_extension(tmp_path)
+    (ext_dir / "src" / "nodvard_deck_ext_gone" / "__init__.py").write_text(
+        "import asyncio\n"
+        "class Extension:\n"
+        "    async def setup(self, ctx):\n"
+        "        pass\n"
+        "    async def on_start(self, ctx):\n"
+        f"        open({str(started)!r}, 'w').write('x')\n"
+        "        await asyncio.sleep(0.1)\n"
+        "    async def on_stop(self, ctx):\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    settings = test_settings.model_copy(update={"extensions_dir": tmp_path / "extensions"})
+    app = FastAPI()
+    app.state.ext_mount_index = len(app.router.routes)
+    async with file_db() as first:
+        await extensions_service.discover_and_sync(first, settings)
+        await first.commit()
+
+    async with file_db() as enabler, file_db() as disabler:
+        await extensions_service.get_record(disabler, "gone-ext")
+
+        async def enable():
+            await extensions_service.enable_extension(app, enabler, settings, "gone-ext")
+            await asyncio.sleep(0.2)  # der Aufrufer committet erst später
+            await enabler.commit()
+
+        async def disable():
+            while not started.exists():  # on_start läuft, das Einschalten hält die Sperre
+                await asyncio.sleep(0.01)
+            await extensions_service.disable_extension(app, disabler, "gone-ext")
+            await disabler.commit()
+
+        await asyncio.gather(enable(), disable())
+
+    async with file_db() as check:
+        assert (await extensions_service.get_record(check, "gone-ext")).state == "disabled"
+    assert "gone-ext" not in get_extension_runtime().loaded
+
+
+def test_lock_for_keeps_no_lock_for_unknown_ids():
+    runtime = get_extension_runtime()
+    runtime.lock_for("gibt-es-nicht")
+    assert "gibt-es-nicht" not in runtime.locks

@@ -11,6 +11,7 @@ import hmac
 import logging
 import re
 import time
+import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -27,6 +28,7 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import set_committed_value
@@ -109,7 +111,7 @@ def _account_key(user_id: str) -> str:
 
 
 SETUP_ATTEMPT_KEY = "einrichtung"
-"""Pseudo-Benutzername für die Drosselung falscher Einrichtungscodes (je IP)."""
+"""Pseudo-Benutzername für die Drosselung falscher Einrichtungscodes (je IP, dazu eine Grenze über alle Adressen)."""
 
 LOGIN_FAILED_MESSAGE = "Ungültiger Benutzername oder Passwort."
 MFA_EXHAUSTED_MESSAGE = "Zu viele falsche Zwei-Faktor-Codes. Bitte melde dich erneut an."
@@ -126,11 +128,12 @@ def _begin_attempt(
     brake_name: bool = False,
     password_login: bool = False,
     address: str | None = None,
+    setup: bool = False,
 ) -> login_limit.Attempt:
     try:
         return login_limit.begin(
             ip, username, mfa_token=mfa_token, account=account, brake_name=brake_name, password_login=password_login,
-            address=address,
+            address=address, setup=setup,
         )
     except login_limit.MfaTokenUsed:
         raise InvalidMfaCode(MFA_TOKEN_USED_MESSAGE) from None
@@ -170,6 +173,10 @@ async def _verify_password(
 def _lock_windows(scopes: list[str]) -> dict[str, int]:
     if scopes == [login_limit.SCOPE_NAME]:
         return {"window_seconds": login_limit.NAME_WINDOW_SECONDS}
+    if scopes == [login_limit.SCOPE_SETUP]:
+        return {"window_seconds": login_limit.SETUP_WINDOW_SECONDS}
+    if login_limit.SCOPE_SETUP in scopes:
+        return {"window_seconds": login_limit.WINDOW_SECONDS, "setup_window_seconds": login_limit.SETUP_WINDOW_SECONDS}
     name = {"name_window_seconds": login_limit.NAME_WINDOW_SECONDS} if login_limit.SCOPE_NAME in scopes else {}
     # Die Grenze je Konto für den zweiten Faktor hat zwei Fenster; ist sie dabei, stehen beide immer drin, denn aus den
     # Scopes allein sieht man nicht, welches griff (auch zusammen mit einer anderen Grenze: Beim Anmelden erreichen
@@ -255,6 +262,10 @@ async def _record_failure(
         login_limit.SCOPE_PASSWORD: (
             f"{login_limit.MAX_PASSWORD_FAILURES_PER_NAME} Fehlversuche für diesen Benutzernamen "
             f"in {minutes} Minuten über alle Adressen aus fremden Netzen"
+        ),
+        login_limit.SCOPE_SETUP: (
+            f"{login_limit.MAX_SETUP_FAILURES} falsche Einrichtungscodes "
+            f"in {login_limit.SETUP_WINDOW_SECONDS // 60} Minuten über alle Adressen"
         ),
     }
     await audit_service.log(
@@ -521,6 +532,10 @@ def validate_new_username(username: str) -> str:
 
 
 SETUP_CODE_HINT = "Der Einrichtungscode steht im Protokoll des Containers (beim Start ausgegeben)."
+SETUP_RESTART_HINT = (
+    "Oder den Container neu starten, dann geht es sofort weiter (der Einrichtungscode steht dann wieder im Protokoll)."
+)
+"""Die Sperre für Einrichtungscodes liegt nur im Speicher, ein Neustart hebt sie auf."""
 
 
 async def prepare_setup_code(session: AsyncSession, settings: Settings) -> str | None:
@@ -530,12 +545,15 @@ async def prepare_setup_code(session: AsyncSession, settings: Settings) -> str |
         if settings.setup_code:
             print("Hinweis: NODVARD_DECK_SETUP_CODE wird ignoriert, weil bereits ein Konto existiert.", flush=True)
         return None
-    if settings.setup_code and setup_code.valid_preset(settings.setup_code) is None:
+    problem = setup_code.preset_problem(settings.setup_code)
+    if problem == "too_short":
         print(
             "Hinweis: NODVARD_DECK_SETUP_CODE ist zu kurz (mindestens "
             f"{setup_code.MIN_PRESET_LEN} Buchstaben oder Ziffern) und wird ignoriert.",
             flush=True,
         )
+    elif problem == "example":
+        print("Hinweis: NODVARD_DECK_SETUP_CODE ist ein Beispielwert aus der Anleitung und wird ignoriert.", flush=True)
     code, _created = setup_code.ensure(settings.data_dir, settings.setup_code)
     # `print` statt Logging: Der Code muss sichtbar sein, auch wenn niemand Logging konfiguriert hat (uvicorn tut das
     # nur für seine eigenen Logger).
@@ -551,9 +569,12 @@ async def verify_setup_code(
     ip: str | None,
     user_agent: str | None = None,
 ) -> None:
-    """Prüft den Einrichtungscode, gedrosselt wie der Login (je IP); wirft `InvalidSetupCode` oder
-    `TooManyAttempts`."""
-    attempt = _begin_attempt(ip, SETUP_ATTEMPT_KEY)
+    """Prüft den Einrichtungscode, gedrosselt wie der Login (je IP) und über alle Adressen; wirft `InvalidSetupCode`
+    oder `TooManyAttempts`."""
+    try:
+        attempt = _begin_attempt(ip, SETUP_ATTEMPT_KEY, setup=True)
+    except TooManyAttempts as exc:
+        raise TooManyAttempts(f"{exc} {SETUP_RESTART_HINT}", retry_after=exc.retry_after) from None
     # Fehlt der Code (z. B. nach einem abgebrochenen Start), wird einer angelegt und ausgegeben; die Anfrage scheitert
     # dann, denn der Anrufer kennt ihn nicht.
     created_code, created = setup_code.ensure(settings.data_dir, settings.setup_code)
@@ -579,26 +600,45 @@ async def verify_setup_code(
     login_limit.succeeded(attempt)
 
 
+_bootstrap_slot: tuple[weakref.ReferenceType[asyncio.AbstractEventLoop], asyncio.Lock] | None = None
+
+
+def _bootstrap_lock() -> asyncio.Lock:
+    # Je Loop eine Sperre, der Platz hält den Loop nur schwach.
+    global _bootstrap_slot
+    loop = asyncio.get_running_loop()
+    if _bootstrap_slot is None or _bootstrap_slot[0]() is not loop:
+        _bootstrap_slot = (weakref.ref(loop), asyncio.Lock())
+    return _bootstrap_slot[1]
+
+
 async def bootstrap_owner(session: AsyncSession, *, username: str, password: str) -> User:
     """Legt den ersten Nutzer als Owner an, nur wenn noch keiner existiert, daher braucht der Endpunkt keine
     Anmeldung."""
-    if not await needs_bootstrap(session):
-        raise UsersAlreadyExist("Es existiert bereits mindestens ein Nutzer.")
-
-    await ensure_builtin_roles(session)
-
-    user = User(
-        username=normalize_username(username),
-        password_hash=await security.hash_password_async(password),
-        is_owner=True,
-        is_active=True,
-    )
-    session.add(user)
-    await session.flush()
-    # Ausdrücklich speichern, damit ein älteres Image nach einem Rückweg nicht auf still Merken zurückfällt.
-    await settings_service.set_global(session, "ssh.confirm_new_host_keys", True, updated_by_user_id=user.id)
-    # Wer mit dem neuen Aussehen anfängt, braucht den Hinweis darauf nicht.
-    await settings_service.set_user(session, user.id, settings_service.DESIGN_NOTICE_KEY, True)
+    password_hash = await security.hash_password_async(password)
+    # Prüfen und Anlegen samt Commit unter der Sperre, sonst legen zwei gleichzeitige Anfragen zwei Inhaber an.
+    async with _bootstrap_lock():
+        if not await needs_bootstrap(session):
+            raise UsersAlreadyExist("Es existiert bereits mindestens ein Nutzer.")
+        try:
+            await ensure_builtin_roles(session)
+            user = User(
+                username=normalize_username(username),
+                password_hash=password_hash,
+                is_owner=True,
+                is_active=True,
+            )
+            session.add(user)
+            await session.flush()
+            # Ausdrücklich speichern, damit ein älteres Image nach einem Rückweg nicht auf still Merken zurückfällt.
+            await settings_service.set_global(session, "ssh.confirm_new_host_keys", True, updated_by_user_id=user.id)
+            # Wer mit dem neuen Aussehen anfängt, braucht den Hinweis darauf nicht.
+            await settings_service.set_user(session, user.id, settings_service.DESIGN_NOTICE_KEY, True)
+            await session.commit()
+        except IntegrityError as exc:
+            # Ein zweiter Prozess teilt die Sperre nicht und war mit demselben Namen schneller.
+            await session.rollback()
+            raise UsersAlreadyExist("Es existiert bereits mindestens ein Nutzer.") from exc
     return user
 
 

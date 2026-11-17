@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from nodvard_sdk import AppSuggestion
 
-from .config import NotConfigured, pihole_config
+from .config import NotConfigured, pihole_config, shown_url
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -20,7 +20,9 @@ class PiholeAppSuggestions:
 
     async def app_suggestions(self) -> list[AppSuggestion]:
         try:
-            config = pihole_config(await self._ctx.settings.get())
+            settings = await self._ctx.settings.get()
+            config = pihole_config(settings)
         except NotConfigured:
             return []
-        return [AppSuggestion(name="Pi-hole", url=f"{config.url}/admin/", source=SOURCE)]
+        url = shown_url(settings.get("url"), config.url)
+        return [] if url is None else [AppSuggestion(name="Pi-hole", url=f"{url}/admin/", source=SOURCE)]

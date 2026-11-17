@@ -20,6 +20,7 @@ from .config import (
     NotConfigured,
     NpmConfig,
     npm_config,
+    shown_url,
 )
 
 if TYPE_CHECKING:
@@ -56,8 +57,9 @@ class NpmService:
 
     # -- Clients ---------------------------------------------------------------
 
-    async def npm_client(self) -> NpmClient:
-        settings = await self._settings()
+    async def npm_client(self, settings: dict[str, Any] | None = None) -> NpmClient:
+        if settings is None:
+            settings = await self._settings()
         has_password = await self._ctx.secrets.exists(NPM_SECRET)
         async with self._npm_lock:
             try:
@@ -108,21 +110,23 @@ class NpmService:
 
     async def npm_status(self, *, now: datetime | None = None) -> dict[str, Any]:
         empty = {"hosts": [], "certificates": [], "summary": None}
+        settings = await self._settings()
         try:
-            client = await self.npm_client()
+            client = await self.npm_client(settings)
         except NotConfigured as exc:
             return {"state": "not_configured", "message": str(exc), "invalid": isinstance(exc, InvalidSetting), "url": None, **empty}
+        url = shown_url(settings.get("url"), client.base_url)
         try:
             certificates = await client.certificates(now=now or datetime.now(timezone.utc))
             hosts = await client.proxy_hosts(certificates)
         except NpmError as exc:
-            return {"state": exc.state, "message": str(exc), "url": client.base_url, **empty}
+            return {"state": exc.state, "message": str(exc), "url": url, **empty}
         certificates.sort(key=lambda c: (c["days_left"] is None, c["days_left"] if c["days_left"] is not None else 0))
         hosts.sort(key=lambda h: (h["domains"][0].lower() if h["domains"] else ""))
         return {
             "state": "ok",
             "message": None,
-            "url": client.base_url,
+            "url": url,
             "hosts": hosts,
             "certificates": certificates,
             "summary": {

@@ -288,7 +288,6 @@ of the Docker module, no list is needed: the check for old names only forbids th
 |---|---|---|
 | Extension packages `nodvard_deck_ext_<id>` | `lattice_ext_<id>` | No alias for the built-in ones (the `entrypoint` comes fresh from `extension.toml`); third-party packages with the old name keep loading |
 | Environment variables `NODVARD_DECK_*` | `LATTICE_*` | Fallback if the new one isn't set; only for a transition (by 1.0 at the latest), with a notice for the owner in the overview |
-| Refresh cookie `nodvard_deck_refresh` | `lattice_refresh` | Both are written, read, and deleted on logout ([API](API.md)) |
 | Image, Compose service, containers `nodvard-deck`, `deploy-nodvard-deck-1` | `lattice`, `deploy-lattice-1` | Migrated on first deploy ([deploy/README](../../deploy/README.md)) |
 
 **Removed with 0.12 (before the promise for 1.0):**
@@ -298,6 +297,7 @@ of the Docker module, no list is needed: the check for old names only forbids th
 | Python package `nodvard_deck` | `lattice` | `import lattice` and `python -m lattice.…` no longer work. An image from before the rename, however, only knows the old name ([deploy/README](../../deploy/README.md), way back) |
 | SDK `nodvard_sdk`, `NodvardExtension`, `NodvardError` | `lattice_sdk`, `LatticeExtension`, `LatticeError` | An extension that imports an old package or class name does not load. If it is enabled, the extension list gives the reason and the new name; otherwise the same reason appears when it is enabled (`ext/old_names.py`) |
 | Entry-point group `nodvard_deck.extensions` | `lattice.extensions` | A package that registers only under the old group is not loaded. The log names the reason and, if the extension was enabled, so does its row in the list |
+| Refresh cookie `nodvard_deck_refresh` | `lattice_refresh` | Neither read nor written; anyone who only had the old cookie signs in again once ([API](API.md)) |
 | Frontend: `window.__nodvardDeck`, events `nodvard-deck:*`, CSS `.nodvard-deck-focus`, import map `/nodvard-deck-shim/` | `window.__lattice`, `lattice:*`, `.lattice-focus`, `/lattice-shim/` | Bundles with an older UI kit that only knows the old names do not find the core shell ([Extension interface](EXTENSION-API.md)); an old tab needs one "Reload page" („Seite neu laden“) |
 | Browser storage `nodvard-deck.*` | `lattice.*` | No longer carried over; the migration has run on every start since the rename |
 

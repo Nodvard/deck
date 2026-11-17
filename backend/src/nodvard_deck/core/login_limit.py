@@ -69,6 +69,10 @@ LOCAL_NETWORKS = tuple(
     )
 )
 """Netze, für die die Bremse je Benutzername nicht gilt: Heimnetz, Docker, VPN."""
+MAX_SETUP_FAILURES = 100
+"""Falsche Einrichtungscodes im Fenster über alle Adressen zusammen, danach 429; sonst raten viele Adressen
+unbegrenzt. Aussperren kann das kein Konto, vor der Einrichtung gibt es keins."""
+SETUP_WINDOW_SECONDS = 60 * 60
 TOTP_STEP_SECONDS = 30
 """Länge eines TOTP-Zeitschritts (Standard, wie bei pyotp)."""
 RESTORE_FUTURE_SECONDS = ACCOUNT_DAY_SECONDS
@@ -83,6 +87,8 @@ SCOPE_IP = "ip"
 SCOPE_ACCOUNT = "account"
 SCOPE_NAME = "name"
 SCOPE_PASSWORD = "password"
+SCOPE_SETUP = "setup"
+_SETUP_KEY = "einrichtung"
 
 
 def _now() -> float:
@@ -163,6 +169,8 @@ class Attempt:
     """Zählt für die Bremse je Benutzername."""
     password_login: bool = False
     """Zählt für die Passwortgrenze über alle Adressen (nur aus fremden Netzen)."""
+    setup: bool = False
+    """Zählt für die Grenze falscher Einrichtungscodes über alle Adressen."""
     name_net_before: tuple[float, int] | None = None
     """Stand des Netzes in der Bremse vor diesem Versuch, damit `release` ihn zurücknehmen kann."""
 
@@ -186,6 +194,8 @@ _by_name: dict[int, deque[float]] = {}
 """Platz des Benutzernamens (`_name_slot`) -> Zeitpunkte der gebremsten Anmeldeversuche (höchstens `_NAME_KEEP`)."""
 _by_password_name: dict[int, deque[float]] = {}
 """Platz des Benutzernamens -> Passwortversuche im kurzen Fenster, unabhängig von der Adresse."""
+_by_setup: dict[str, deque[float]] = {}
+"""`_SETUP_KEY` -> Zeitpunkte der Einrichtungscode-Versuche, unabhängig von der Adresse."""
 _name_nets: dict[tuple[int, str], tuple[float, int]] = {}
 """(Platz, Netz) -> (letzter Versuch, Zahl der Versuche) aus diesem Netz; die Wartezeit hängt nur daran, damit Versuche
 von anderswo niemanden aussperren."""
@@ -206,6 +216,7 @@ def reset() -> None:
         _by_account.clear()
         _by_name.clear()
         _by_password_name.clear()
+        _by_setup.clear()
         _name_nets.clear()
         _mfa_used.clear()
         _totp_steps.clear()
@@ -289,6 +300,8 @@ def _sweep(now: float) -> None:
             _pruned(store, key, now)
     for key in list(_by_account):
         _pruned(_by_account, key, now, ACCOUNT_DAY_SECONDS)
+    for key in list(_by_setup):
+        _pruned(_by_setup, key, now, SETUP_WINDOW_SECONDS)
     for key, (_count, first) in list(_mfa.items()):
         if now - first > MFA_ENTRY_TTL_SECONDS:
             del _mfa[key]
@@ -305,6 +318,7 @@ def _sweep(now: float) -> None:
         | {(SCOPE_ACCOUNT, k) for k in _by_account}
         | {(SCOPE_NAME, k) for k in _by_name}
         | {(SCOPE_PASSWORD, k) for k in _by_password_name}
+        | {(SCOPE_SETUP, k) for k in _by_setup}
     )
 
 
@@ -321,6 +335,7 @@ def begin(
     brake_name: bool = False,
     password_login: bool = False,
     address: str | None = None,
+    setup: bool = False,
 ) -> Attempt:
     """Vor der Passwort-/Code-Prüfung aufrufen: wirft `MfaTokenUsed`, `MfaExhausted` oder `Locked`, sonst zählt der
     Versuch sofort. `brake_name` nur bei der Anmeldung aus einem fremden Netz; `password_login` wirkt nur dort."""
@@ -366,6 +381,12 @@ def begin(
             wait_password = _retry_after(password_dq, MAX_PASSWORD_FAILURES_PER_NAME, now)
             if not wait_password:
                 _announced.discard((SCOPE_PASSWORD, slot))
+        wait_setup = 0
+        if setup:
+            setup_dq = _pruned(_by_setup, _SETUP_KEY, now, SETUP_WINDOW_SECONDS)
+            wait_setup = _retry_after_window(setup_dq, MAX_SETUP_FAILURES, SETUP_WINDOW_SECONDS, now)
+            if not wait_setup:
+                _announced.discard((SCOPE_SETUP, _SETUP_KEY))
         net = None
         if brake_name:
             name_dq = _pruned(_by_name, slot, now, NAME_WINDOW_SECONDS)
@@ -377,8 +398,8 @@ def begin(
             _announced.discard((SCOPE_USER, *user_key))
         if not wait_ip:
             _announced.discard((SCOPE_IP, bucket))
-        if wait_user or wait_ip or wait_account or wait_name or wait_password:
-            raise Locked(max(wait_user, wait_ip, wait_account, wait_name, wait_password))
+        if wait_user or wait_ip or wait_account or wait_name or wait_password or wait_setup:
+            raise Locked(max(wait_user, wait_ip, wait_account, wait_name, wait_password, wait_setup))
 
         # Schon beim Start zählen, nicht erst beim Scheitern: Sonst kämen viele gleichzeitige Anfragen alle an der
         # Prüfung vorbei, bevor der erste Fehlschlag eingetragen ist.
@@ -390,6 +411,8 @@ def begin(
             _by_password_name.setdefault(slot, deque(maxlen=MAX_PASSWORD_FAILURES_PER_NAME)).append(now)
         if account is not None:
             _by_account.setdefault(account, deque()).append(now)
+        if setup:
+            _by_setup.setdefault(_SETUP_KEY, deque()).append(now)
         if brake_name:
             _by_name.setdefault(slot, deque(maxlen=_NAME_KEEP)).append(now)
             _name_nets.pop((slot, bucket), None)
@@ -412,6 +435,7 @@ def begin(
             address_bucket=address_bucket,
             braked=brake_name,
             password_login=password_login,
+            setup=setup,
             name_net_before=net,
         )
 
@@ -450,6 +474,12 @@ def failed(attempt: Attempt) -> list[str]:
             if len(dq) >= NAME_FREE_FAILURES and marker not in _announced:
                 _announced.add(marker)
                 started.append(SCOPE_NAME)
+        if attempt.setup:
+            marker = (SCOPE_SETUP, _SETUP_KEY)
+            dq = _pruned(_by_setup, _SETUP_KEY, now, SETUP_WINDOW_SECONDS)
+            if len(dq) >= MAX_SETUP_FAILURES and marker not in _announced:
+                _announced.add(marker)
+                started.append(SCOPE_SETUP)
         if attempt.password_login:
             slot = _name_slot(attempt.username)
             marker = (SCOPE_PASSWORD, slot)
@@ -485,6 +515,8 @@ def release(attempt: Attempt) -> None:
             _discard(_by_ip.get(attempt.address_bucket), attempt.ts)
         if attempt.account is not None:
             _discard(_by_account.get(attempt.account), attempt.ts)
+        if attempt.setup:
+            _discard(_by_setup.get(_SETUP_KEY), attempt.ts)
         if attempt.password_login:
             _discard(_by_password_name.get(_name_slot(attempt.username)), attempt.ts)
         if attempt.braked:
@@ -504,6 +536,8 @@ def succeeded(attempt: Attempt) -> None:
             _discard(_by_ip.get(attempt.address_bucket), attempt.ts)
         if attempt.account is not None:
             _discard(_by_account.get(attempt.account), attempt.ts)
+        if attempt.setup:
+            _discard(_by_setup.get(_SETUP_KEY), attempt.ts)
         slot = _name_slot(attempt.username)
         if attempt.password_login:
             _discard(_by_password_name.get(slot), attempt.ts)

@@ -3560,12 +3560,12 @@ async def _watch_runs(ctx, steps):
 
 @pytest.mark.asyncio
 async def test_many_capped_watch_runs_in_a_row_leave_one_line_per_server():
-    """Bei dauerhaft vielen neuen Dateien war jeder Waechter-Lauf eine eigene Fehlerzeile (bis 144 am Tag und Server);
-    die Liste zeigt nur 100 Zeilen, echte Schnell- und Tiefenscans fielen heraus."""
+    """Gedeckelte Wächter-Läufe lassen je Server eine Zeile stehen und erhalten echte Scans."""
     from nodvard_sdk import Host
 
     ctx = _FakeCtx(None, {})
     h1, h2 = ctx._host, Host(id="h2", name="pve2", display_name="pve2", address="10.0.0.3")
+    ctx.hosts.list = mock.AsyncMock(return_value=[h1, h2])
     rows = await _watch_runs(ctx, [(h1, "quick", CLEAN_WATCH)] + [(h1, "watch", CAPPED)] * 5 + [(h2, "watch", CAPPED)] * 2)
     assert [(r["host_id"], r["kind"], r["status"]) for r in rows] == [
         ("h1", "quick", "clean"), ("h1", "watch", "error"), ("h2", "watch", "error")]

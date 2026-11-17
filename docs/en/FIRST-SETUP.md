@@ -159,10 +159,10 @@ the container. Before the first start, create a text file named exactly **`.env`
 `compose.yml`. Add one line:
 
 ```dotenv
-NODVARD_DECK_SETUP_CODE=my-own-setup-code-7392
+NODVARD_DECK_SETUP_CODE=PUT-YOUR-OWN-CODE-HERE
 ```
 
-Choose your own code that is difficult to guess instead of using the example. It must contain at least **8 letters
+Replace the placeholder with your own code that is difficult to guess. It must contain at least **12 letters
 or digits in total**. Only `A` to `Z`, `a` to `z` and `0` to `9` count. Other characters, including umlauts,
 dashes and spaces, are removed; lowercase letters become uppercase. Then start with `docker compose up -d`.
 For an installation from the repository, the `.env` file goes next to `deploy/docker-compose.yml`.
@@ -244,10 +244,10 @@ servers so you can see what everything looks like when filled ([appendix E.2](#e
 4. **Operating system** („Betriebssystem“): Linux or Windows. For Windows servers there is no setup command and no
    privilege check. Really choose Windows for a Windows server (such as a game server): otherwise Nodvard Deck sends
    long commands the Linux way, and they fail on Windows.
-5. **Tags** („Markierungen“) (comma-separated): `docker` if Docker runs there – the Docker module (setting "Server
-   tag" – „Server-Markierung“) and the AI container watch of Nodvard Shield ("Monitored servers" – „Überwachte Server“)
-   take exactly the servers with this tag. Game servers appear only with the tag `gameserver`. Tags can be changed at
-   any time, also for Proxmox VMs (the ones set by Proxmox stay; they cannot be changed).
+5. **Tags** („Markierungen“): fixed checkboxes explain the standard tags for full Docker management, limited Docker
+   operation, game servers, the machine running Nodvard Deck, and NAS devices. Custom tags remain possible in the
+   **Custom tags** field, separated by commas or spaces. Tags can be changed later, including for Proxmox VMs.
+   Tags managed by an extension remain selected and cannot be changed in this form.
 6. **"Create"** („Anlegen“). The new server's page opens and immediately offers the next step.
 
 Wrong input is reported right at the field, in German (e.g. „Kurzname: nur Kleinbuchstaben, Ziffern, - und _ …“,
@@ -1395,6 +1395,30 @@ and group, remove widgets and rename groups. Only **"Done"** („Fertig“) save
 („Abbrechen“) discards the changes; you bring a removed widget back via **"Manage widgets"** („Widgets verwalten“). On a
 phone the cards are stacked: height, group and removing work there too, moving and width only on a larger screen.
 
+### G.7 Jellyfin (Beta, read-only)
+
+For each connection, Deck stores an API key encrypted in the vault. The key belongs to the configured server address;
+changing that address deletes it. Jellyfin keys have administrative privileges and cannot be restricted to read-only,
+although this module only reads data. It reads server details, library counts, up to ten recently added films and
+episodes, and current playback details including user and device names. Requests go only to the configured address and
+redirects are rejected. Everyone with `hosts.read`, including viewers, can see these details.
+
+### G.8 Plex (Beta, read-only)
+
+Deck stores the Plex token encrypted in the vault and deletes it when the configured server address changes. The token
+has the full privileges of its Plex account, although this module only reads data. It reads server and library details,
+up to ten recently added items, and current playback details including user and device names. Requests go only to the
+configured address, redirects are rejected, and the module makes no additional requests to plex.tv. Everyone with
+`hosts.read`, including viewers, can see these details.
+
+### G.9 qBittorrent (Beta, read-only)
+
+If qBittorrent requires a login, Deck stores its password encrypted in the vault and deletes it when the configured
+address changes. The module reads version, transfer rates, connection state, limits, free disk space, state counts,
+and up to 50 active torrents with their names and progress. It changes no torrents and only sends write requests to
+sign in and out. Everyone with `hosts.read`, including viewers, can see active torrent names. After a rejected login,
+Deck waits 30 minutes before trying again; **Test connection** ends that pause.
+
 ## H. Automation and maintenance windows
 
 <a id="9-automation-and-maintenance-windows"></a>
@@ -1666,6 +1690,19 @@ You can see them under **Settings → System → "Copies before updates"** („E
 - **Restoring a backup whose migration breaks off** (power loss in the middle): the next start rolls back the restore,
   and exactly the old state with its keys applies again. It is never replaced by the backup afterwards.
 - With a database other than SQLite there is no copy (please back up yourself beforehand).
+
+### I.4 What the update center reports and what it means
+
+Under **Settings → System → Updates**, the card reports the state of Deck's container update. Nodvard Shield handles
+operating-system package updates on connected servers instead.
+
+| Message or state | Meaning | Next step |
+|---|---|---|
+| **“none found”** or **“There is no finished version to download yet.”** | The check succeeded, but the selected channel has no matching version. | Nothing to do. The next finished version appears after a later check, or select the Beta channel for pre-releases. |
+| **“The last update check did not return a checksum for this version.”** | The registry supplied no digest that the update helper can verify. | Run **Check now** again. If it remains absent, update manually with Docker Compose. |
+| **“There is no valid approval for version X yet, or it could not be fetched.”** | Fetching the approval signature from github.com failed, or the release has no approval yet. | Check access to github.com and retry later, or update manually with Docker Compose. |
+| **A security update was found but no notification arrived** | Creating or delivering `notify_security` failed; Deck records `security_notice_failed` in the server log. | Check notification channels and the server log. |
+| **Host package-manager error** | Errors such as `dpkg returned an error code`, an apt lock, missing root rights, or a timeout concern connected servers, not the Deck system settings. | Use the Updates tab in Nodvard Shield for server packages. |
 
 ## J. When something goes wrong
 

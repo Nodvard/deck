@@ -157,10 +157,10 @@ Alte Einträge im Container-Protokoll bleiben sichtbar.
 Textdatei mit dem genauen Namen **`.env`** an (nicht `.env.txt`). Darin steht eine Zeile:
 
 ```dotenv
-NODVARD_DECK_SETUP_CODE=mein-eigener-code-7392
+NODVARD_DECK_SETUP_CODE=HIER-EIGENEN-CODE-EINTRAGEN
 ```
 
-Wähle einen eigenen, schwer zu erratenden Code statt des Beispiels. Er muss insgesamt mindestens **8 Buchstaben
+Ersetze den Platzhalter durch einen eigenen, schwer zu erratenden Code. Er muss insgesamt mindestens **12 Buchstaben
 oder Ziffern** enthalten. Es zählen nur `A` bis `Z`, `a` bis `z` und `0` bis `9`. Andere Zeichen, auch Umlaute,
 Striche und Leerzeichen, werden entfernt; Kleinbuchstaben werden zu Großbuchstaben. Starte anschließend mit
 `docker compose up -d`.

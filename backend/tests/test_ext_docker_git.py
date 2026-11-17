@@ -1237,7 +1237,7 @@ async def test_nested_env_file_merges_are_limited_in_the_worker(monkeypatch):
     else:
         assert answer["ok"] is False
         problem = answer["problem"]
-    assert any(word in problem for word in ("Speicher", "Rechenzeit", "Sekunden")), problem
+    assert any(word in problem for word in ("Speicher", "Rechenzeit", "Sekunden", "lässt sich nicht auswerten")), problem
 
 
 @pytest.mark.asyncio
@@ -1359,6 +1359,55 @@ def test_an_unreadable_compose_file_is_a_problem(text, start):
     warnings, problem = _gf().compose_warnings(text)
     assert warnings == []
     assert problem is None if start is None else problem.startswith(start)
+
+
+def _laughing_bomb(levels: int = 9, fan: int = 9) -> bytes:
+    lines = ["a0: &a0 [x, x, x, x, x, x, x, x, x]"]
+    for i in range(1, levels):
+        lines.append(f"a{i}: &a{i} [" + ", ".join([f"*a{i - 1}"] * fan) + "]")
+    lines.append("services: {}")
+    return "\n".join(lines).encode()
+
+
+def test_nested_aliases_are_refused_quickly():
+    text = _laughing_bomb()
+    assert len(text) < 2000
+    start = time.monotonic()
+    warnings, problem = _gf().compose_warnings(text)
+    assert time.monotonic() - start < 1
+    assert warnings == [] and problem.startswith("Die Compose-Datei verwendet zu viele")
+    with pytest.raises(_gf().ComposeTooComplex):
+        _gf().load_compose(text)
+
+
+@pytest.mark.parametrize("text", [
+    b"a: &a\n  k: v\n  <<: [*a, *a, *a]\nservices: {}\n",
+    b"a: &a\n  b: &b\n    <<: [*a, *b]\nservices: {}\n",
+    b"a: &a [*a, *a]\nservices: {}\n",
+], ids=["merge", "innerer-anker", "liste"])
+def test_references_to_open_anchors_are_refused(text):
+    with pytest.raises(_gf().ComposeTooComplex):
+        _gf().load_compose(text)
+    warnings, problem = _gf().compose_warnings(text)
+    assert warnings == [] and problem.startswith("Die Compose-Datei verwendet zu viele")
+
+
+def test_usual_anchors_and_merge_keys_still_load():
+    text = b"""x-default: &default
+  restart: always
+  environment: {A: "1"}
+services:
+  web:
+    <<: *default
+    image: nginx
+  worker:
+    <<: *default
+    image: app
+"""
+    config = _gf().load_compose(text)
+    assert config["services"]["web"]["restart"] == "always"
+    assert config["services"]["worker"]["image"] == "app"
+    assert _gf().compose_warnings(text) == ([], None)
 
 
 # --- Durch den echten Kern -------------------------------------------------------------------------------------------

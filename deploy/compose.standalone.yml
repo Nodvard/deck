@@ -30,7 +30,7 @@ services:
     cap_drop:
       - ALL
     environment:
-      # Optional in .env vorgeben: mindestens 8 Buchstaben/Ziffern, nur solange noch kein Konto existiert.
+      # Optional in .env vorgeben: mindestens 12 Buchstaben/Ziffern, nur solange noch kein Konto existiert.
       # Leer: zufälliger Code in den Container-Logs. Nach der Einrichtung wird die Variable ignoriert.
       NODVARD_DECK_SETUP_CODE: "${NODVARD_DECK_SETUP_CODE:-}"
     ports:

@@ -304,8 +304,8 @@ class Settings(BaseSettings):
     dessen X-Forwarded-Proto, sobald er unter `system.trusted_proxies` steht; NODVARD_DECK_COOKIE_SECURE=1/0 erzwingt es."""
 
     setup_code: str | None = None
-    """NODVARD_DECK_SETUP_CODE: Einrichtungscode vorgeben (mindestens 8 ASCII-Buchstaben oder Ziffern).
-    Leer oder zu kurz = zufälliger Code. Nur ohne Konto wirksam; danach ignoriert, mit Hinweis im Protokoll."""
+    """NODVARD_DECK_SETUP_CODE: Einrichtungscode vorgeben (mindestens 12 ASCII-Buchstaben oder Ziffern).
+    Leer, zu kurz oder ein Beispielwert aus der Anleitung = zufälliger Code. Nur ohne Konto wirksam; danach ignoriert, mit Hinweis im Protokoll."""
 
     demo_mode: bool = False
     """NODVARD_DECK_DEMO_MODE=1 speist Fake-Daten statt echter Connectoren."""

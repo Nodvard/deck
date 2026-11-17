@@ -437,6 +437,12 @@ async def test_ntfy_topic_result_is_named_next_to_the_other_channels(
     assert report.healthy is False and report.details["ntfy"]["verbatim"] is True
     assert "kennt das Thema aber so nicht (HTTP 404)" in report.details["ntfy"]["error"]
 
+    answers.update(auth=403, write=403)
+    report = await extension.health(ctx)
+    assert report.healthy is False and report.details["gotify"]["healthy"] is True
+    assert report.details["ntfy"]["healthy"] is False and report.details["ntfy"]["verbatim"] is True
+    assert report.details["ntfy"]["error"].startswith("Ohne Zugriffstoken fehlt das Schreibrecht")
+
 
 @pytest.mark.asyncio
 async def test_a_replaced_channel_address_is_used_for_the_next_message(fake_services, db_session, tmp_path, test_settings):

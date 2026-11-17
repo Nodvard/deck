@@ -94,5 +94,5 @@ Nodvard Deck is licensed under PolyForm Noncommercial: source-available, free fo
 
 ## 19. Ubuntu updates held back or delayed by phasing
 * **Symptom:** Packages in the Nodvard Shield update manager appear permanently as delayed or held back and cannot be installed.
-* **Cause:** Ubuntu delivers certain packages in staggered phases, or apt requires the removal of obsolete packages before applying the upgrade.
+* **Cause:** Ubuntu delivers certain packages in staggered phases, apt requires the removal or installation of other packages, or a package was explicitly locked with `apt-mark hold`.
 * **Solution:** Phasing: wait. Held-back dependencies: run `sudo apt full-upgrade` on the server and review the listed changes. Explicit hold: `apt-mark showhold` lists it; if unintended, `sudo apt-mark unhold <package>` lifts it. A `full-upgrade` does not lift such a hold.

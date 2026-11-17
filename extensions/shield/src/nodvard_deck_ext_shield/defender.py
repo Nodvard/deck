@@ -1202,12 +1202,15 @@ class Defender:
 
     async def overview(self, *, refresh: bool = False) -> dict[str, Any]:
         hosts = await self.target_hosts()
-        hosts_known = len(await self._ctx.hosts.list())
+        known_ids = {h.id for h in await self._ctx.hosts.list()}
+        hosts = [h for h in hosts if h.id in known_ids]
+        host_ids = [h.id for h in hosts]
         statuses = await asyncio.gather(*(self.host_status(h, refresh=refresh) for h in hosts))
         async with self._ctx.db.session() as session:
             last_scans: dict[str, ScanRecord] = {}
             for row in (await session.execute(
-                select(ScanRecord).where(ScanRecord.kind.in_(("quick", "deep", "custom"))).order_by(ScanRecord.started_at.desc()).limit(500)
+                select(ScanRecord).where(ScanRecord.host_id.in_(host_ids), ScanRecord.kind.in_(("quick", "deep", "custom")))
+                .order_by(ScanRecord.started_at.desc()).limit(500)
             )).scalars():
                 last_scans.setdefault(row.host_id, row)
             # Für den Schutzwert zählt der letzte fertige Scan: Ein gerade laufender (oder abgebrochener) soll den Wert
@@ -1221,12 +1224,13 @@ class Defender:
                 last_done_at[host_id] = started_at
             last_audits: dict[str, AuditRecord] = {}
             last_ok_audits: dict[str, AuditRecord] = {}
-            for row in (await session.execute(select(AuditRecord).order_by(AuditRecord.created_at.desc()).limit(500))).scalars():
+            for row in (await session.execute(select(AuditRecord).where(AuditRecord.host_id.in_(host_ids))
+                                              .order_by(AuditRecord.created_at.desc()).limit(500))).scalars():
                 last_audits.setdefault(row.host_id, row)
                 if row.status == "ok" and row.hardening_index is not None:
                     last_ok_audits.setdefault(row.host_id, row)
             counts = dict((await session.execute(
-                select(FindingRecord.status, func.count()).group_by(FindingRecord.status)
+                select(FindingRecord.status, func.count()).where(FindingRecord.host_id.in_(known_ids)).group_by(FindingRecord.status)
             )).all())
             # Dieselbe Quelle wie die Gesamtzahl oben (Funde samt Zustand, nicht das Ergebnis des letzten Scans), sonst
             # widersprächen sich Kopf und Zeile nach Quarantäne oder Löschen, und offene Funde des Wächters fehlten.
@@ -1249,9 +1253,8 @@ class Defender:
                         counted[finding_status] = counted.get(finding_status, 0) + 1
             since = _now() - timedelta(days=30)
             recent = (await session.execute(
-                select(func.count()).select_from(FindingRecord).where(FindingRecord.detected_at >= since)
+                select(func.count()).select_from(FindingRecord).where(FindingRecord.host_id.in_(known_ids), FindingRecord.detected_at >= since)
             )).scalar_one()
-            host_ids = [h.id for h in hosts]
             critical_events = (await session.execute(
                 select(func.count()).select_from(SecurityEventRecord).where(
                     SecurityEventRecord.acknowledged.is_(False), SecurityEventRecord.severity == "critical",
@@ -1307,7 +1310,7 @@ class Defender:
             "summary": {
                 # "hosts" sind nur die prüfbaren Server (Linux, verwaltet, mit SSH-Zugang, ggf. passende Markierung);
                 # "hosts_known" alle eingerichteten: Die Seite unterscheidet "keiner angelegt" von "keiner prüfbar".
-                "hosts": len(rows), "hosts_known": hosts_known, "protected": protected, "open_threats": open_threats,
+                "hosts": len(rows), "hosts_known": len(known_ids), "protected": protected, "open_threats": open_threats,
                 "quarantined": int(counts.get("quarantined", 0)),
                 "neutralized_total": int(counts.get("quarantined", 0)) + int(counts.get("deleted", 0)),
                 "findings_30d": int(recent),
@@ -1374,7 +1377,8 @@ class Defender:
     # --- Listen -----------------------------------------------------------------
 
     async def list_scans(self, *, host: str | None = None, limit: int = 100, include_watch: bool = False) -> list[dict[str, Any]]:
-        stmt = select(ScanRecord).order_by(ScanRecord.started_at.desc()).limit(limit)
+        ids = [h.id for h in await self._ctx.hosts.list()]
+        stmt = select(ScanRecord).where(ScanRecord.host_id.in_(ids)).order_by(ScanRecord.started_at.desc()).limit(limit)
         if host:
             stmt = stmt.where(ScanRecord.host_id == host)
         if not include_watch:
@@ -1383,15 +1387,18 @@ class Defender:
             return [scan_out(r) for r in (await session.execute(stmt)).scalars()]
 
     async def list_findings(self, *, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        stmt = select(FindingRecord).order_by(FindingRecord.detected_at.desc()).limit(limit)
+        ids = [h.id for h in await self._ctx.hosts.list()]
+        stmt = select(FindingRecord).where(FindingRecord.host_id.in_(ids)).order_by(FindingRecord.detected_at.desc()).limit(limit)
         if status:
             stmt = stmt.where(FindingRecord.status == status)
         async with self._ctx.db.session() as session:
             return [finding_out(r) for r in (await session.execute(stmt)).scalars()]
 
     async def latest_audits(self) -> list[dict[str, Any]]:
+        ids = [h.id for h in await self._ctx.hosts.list()]
         async with self._ctx.db.session() as session:
-            rows = (await session.execute(select(AuditRecord).order_by(AuditRecord.created_at.desc()).limit(500))).scalars()
+            rows = (await session.execute(select(AuditRecord).where(AuditRecord.host_id.in_(ids))
+                                          .order_by(AuditRecord.created_at.desc()).limit(500))).scalars()
             latest: dict[str, AuditRecord] = {}
             for r in rows:
                 latest.setdefault(r.host_id, r)

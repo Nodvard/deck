@@ -125,7 +125,13 @@ class ServerInfoService:
                 # Ändert sich eines davon, wird neu gefragt.
                 fingerprint = (cfg, has_token, has_password, self._generation)
                 entry = self._entry
-                if not refresh and entry is not None and entry.fingerprint == fingerprint and entry.expires > self._clock():
+                # Eine abgelehnte Anmeldung gilt auch für „Aktualisieren“, sonst sperrt Nextcloud das Konto.
+                if (
+                    entry is not None
+                    and entry.fingerprint == fingerprint
+                    and entry.expires > self._clock()
+                    and (not refresh or entry.result.state == "auth_failed")
+                ):
                     return entry.result
                 result = await self._load(cfg, has_token, has_password)
                 self._entry = _Entry(fingerprint, self._clock() + self._ttl(result), result)

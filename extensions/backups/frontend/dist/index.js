@@ -1085,11 +1085,13 @@ var STATUS_LABEL = {
   ok: "OK",
   failed: "Fehlgeschlagen",
   running: "L\xE4uft",
-  unknown: "Unbekannt"
+  unknown: "Unbekannt",
+  job_error: "Job mit Fehlern, Gast unklar"
 };
 var STATUS_CLASS = {
   ok: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
   failed: "bg-red-500/15 text-red-300 border-red-500/40",
+  job_error: "bg-amber-500/15 text-amber-300 border-amber-500/40",
   running: "bg-amber-500/15 text-amber-300 border-amber-500/40",
   unknown: "bg-white/10 opacity-70"
 };
@@ -1542,7 +1544,7 @@ function BackupsPage() {
   }
   const unreachable = allJobs?.filter((j) => j.last_status === "unreachable") ?? [];
   const jobs = allJobs ? allJobs.filter((j) => j.last_status !== "unreachable") : null;
-  const failing = jobs?.filter((j) => j.last_status === "failed" || j.last_status === "unknown").length ?? 0;
+  const failing = jobs?.filter((j) => j.last_status === "failed" || j.last_status === "unknown" || j.last_status === "job_error").length ?? 0;
   const { inventory, orphans, error: inventoryError, reload: reloadInventory } = useInventory();
   const visibleJobs = jobs && hostFilter ? jobs.filter((j) => j.host_id === hostFilter) : jobs;
   return /* @__PURE__ */ jsxs6("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: [

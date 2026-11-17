@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -9,6 +10,9 @@ from typing import Any, Protocol
 from .rbac import has_permission
 
 logger = logging.getLogger("nodvard_deck.ws")
+
+# Ein Client, der nicht mehr liest, darf die Zustellung an die anderen nicht aufhalten.
+SEND_TIMEOUT_S = 5.0
 
 
 class _SendsJson(Protocol):
@@ -92,9 +96,25 @@ class WsHub:
             if reduced is not full and not has_permission(conn.permissions, full_permission):  # type: ignore[arg-type]
                 message = reduced
             try:
-                await conn.socket.send_json(message)
+                async with asyncio.timeout(SEND_TIMEOUT_S):
+                    await conn.socket.send_json(message)
+            except TimeoutError:
+                logger.warning("ws_hub_send_failed conn_id=%s channel=%s reason=timeout", conn_id, channel)
+                self.disconnect(conn_id)
+                await self._close_quietly(conn.socket)
             except Exception:  # noqa: BLE001
                 logger.warning("ws_hub_send_failed conn_id=%s channel=%s", conn_id, channel)
+
+    @staticmethod
+    async def _close_quietly(socket: _SendsJson) -> None:
+        close = getattr(socket, "close", None)
+        if close is None:
+            return
+        try:
+            async with asyncio.timeout(SEND_TIMEOUT_S):
+                await close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 _hub: WsHub | None = None

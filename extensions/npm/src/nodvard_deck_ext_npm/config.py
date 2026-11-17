@@ -3,6 +3,7 @@ Anmeldung gelesen."""
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -74,12 +75,29 @@ def normalize_url(raw: Any, *, strip_suffixes: tuple[str, ...] = ()) -> str | No
     return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
 
+def _at_signs(text: str) -> int:
+    """Zählt `@` auch in Formen, die `urlsplit` per NFKC zu `@` macht (Vollbreite, klein)."""
+    return unicodedata.normalize("NFKC", text).count("@")
+
+
+def shown_url(raw: Any, url: str) -> str | None:
+    """Die Adresse für Leser, ohne `benutzer:passwort@`. Steht ein `@` der Eingabe nicht im Adressteil (etwa bei einem
+    Passwort mit `/` oder `#`), lässt sich nicht sicher kürzen, dann `None`."""
+    parts = urlsplit(url)
+    if _at_signs(str(raw or "")) != _at_signs(parts.netloc):
+        return None
+    return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
+
+
 def npm_config(settings: dict[str, Any]) -> NpmConfig:
     """Ohne Passwortprüfung (die braucht den Tresor, siehe `service.py`)."""
+    raw_url = settings.get("url")
     try:
-        url = normalize_url(settings.get("url"), strip_suffixes=("/api",))
+        url = normalize_url(raw_url, strip_suffixes=("/api",))
     except ValueError as exc:
-        raise InvalidSetting(f"Die Adresse des Nginx Proxy Managers „{exc}“ ist ungültig – bitte in den Einstellungen prüfen.") from exc
+        # Mit `@` könnte die Eingabe ein Passwort enthalten, dann wird sie nicht zitiert.
+        shown = "" if _at_signs(str(raw_url or "")) else f" „{exc}“"
+        raise InvalidSetting(f"Die Adresse des Nginx Proxy Managers{shown} ist ungültig – bitte in den Einstellungen prüfen.") from exc
     identity = str(settings.get("identity") or "").strip()
     if url is None:
         raise NotConfigured(

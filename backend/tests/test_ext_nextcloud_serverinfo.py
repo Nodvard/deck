@@ -947,10 +947,90 @@ async def test_a_rejected_login_is_not_repeated_every_minute(client, db_session,
     assert len(fake.requests) == 1, "vier Minuten lang keine weitere Anmeldung"
 
     assert (await _serverinfo(client, headers, "?refresh=true"))["state"] == "auth_failed"
-    assert len(fake.requests) == 2, "Aktualisieren fragt trotzdem"
+    assert len(fake.requests) == 1, "auch Aktualisieren meldet sich in der Pause nicht neu an"
 
     now[0] += nc_service.AUTH_FAILED_TTL_S + 1
     await _serverinfo(client, headers)
+    assert len(fake.requests) == 2
+
+
+async def _viewer(client, headers) -> dict:
+    roles = {r["name"]: r["id"] for r in (await client.get("/api/v1/roles", headers=headers)).json()}
+    created = await client.post(
+        "/api/v1/users", json={"username": "gast", "password": "gast-passwort-1", "role_ids": [roles["viewer"]]}, headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    login = await client.post("/api/v1/auth/login", json={"username": "gast", "password": "gast-passwort-1"})
+    assert login.status_code == 200, login.text
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+@pytest.mark.asyncio
+async def test_refresh_by_a_viewer_does_not_log_in_again_during_the_pause(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, password="falsch-falsch")
+    viewer = await _viewer(client, headers)
+    service = _service()
+    now = [5000.0]
+    service._clock = lambda: now[0]
+
+    assert (await _serverinfo(client, viewer, "?refresh=true"))["state"] == "auth_failed"
+    for _ in range(5):
+        now[0] += 1.0
+        assert (await _serverinfo(client, viewer, "?refresh=true"))["state"] == "auth_failed"
+    assert len(fake.requests) == 1
+
+    now[0] = 5000.0 + nc_service.AUTH_FAILED_TTL_S + 1
+    assert (await _serverinfo(client, viewer, "?refresh=true"))["state"] == "auth_failed"
+    assert len(fake.requests) == 2, "nach der Frist wird wieder gefragt"
+
+
+@pytest.mark.asyncio
+async def test_refresh_asks_again_after_a_new_secret_ends_the_pause(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, password="falsch-falsch")
+    assert (await _serverinfo(client, headers, "?refresh=true"))["state"] == "auth_failed"
+    assert (await _serverinfo(client, headers, "?refresh=true"))["state"] == "auth_failed"
+    assert len(fake.requests) == 1
+
+    _service().forget()
+    assert (await _serverinfo(client, headers, "?refresh=true"))["state"] == "auth_failed"
+    assert len(fake.requests) == 2
+
+    await _set_secret(client, headers, "nextcloud-app-password", PASSWORD)
+    assert (await _serverinfo(client, headers, "?refresh=true"))["state"] == "ok"
+    assert len(fake.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_refresh_asks_again_after_changed_settings_end_the_pause(client, db_session, test_settings, monkeypatch):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, password="falsch-falsch")
+    assert (await _serverinfo(client, headers, "?refresh=true"))["state"] == "auth_failed"
+    # Ohne `clear()` muss die geänderte Kennung allein die Pause beenden.
+    monkeypatch.setattr(_service(), "clear", lambda: None)
+    fake.admin = ("bob", "falsch-falsch")
+    saved = await client.put(f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": {"username": "bob"}}, headers=headers)
+    assert saved.status_code == 200, saved.text
+    assert (await _serverinfo(client, headers, "?refresh=true"))["state"] == "ok"
+    assert len(fake.requests) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("problem", ["unreachable", "app_inactive"])
+async def test_refresh_still_skips_the_cache_for_other_states(client, db_session, test_settings, problem):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    if problem == "unreachable":
+        fake.error = httpx.ConnectError("refused")
+    else:
+        fake.override = lambda request: httpx.Response(404, json=_fixture("serverinfo_app_off.json"))
+    assert (await _serverinfo(client, headers))["state"] == problem
+    fake.error = None
+    fake.override = None
+    assert (await _serverinfo(client, headers))["state"] == problem, "noch aus dem Zwischenspeicher"
+    assert (await _serverinfo(client, headers, "?refresh=true"))["state"] == "ok"
+    assert (await _serverinfo(client, headers, "?refresh=true"))["state"] == "ok"
     assert len(fake.requests) == 3
 
 

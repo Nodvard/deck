@@ -445,10 +445,10 @@ function CodeHelp() {
           <div>
             <p className="font-medium">Eigenen Code vorgeben (optional)</p>
             <p className="opacity-70">
-              Vor dem ersten Start kannst du <code>NODVARD_DECK_SETUP_CODE=dein-eigener-code</code> in eine Datei <code>.env</code> neben
+              Vor dem ersten Start kannst du <code>NODVARD_DECK_SETUP_CODE=HIER-EIGENEN-CODE-EINTRAGEN</code> in eine Datei <code>.env</code> neben
               der Compose-Datei schreiben. In Portainer trägst du <code>NODVARD_DECK_SETUP_CODE</code> unter „Environment variables“ des Stacks ein.
-              Der Code braucht mindestens 8 Buchstaben von A bis Z oder Ziffern von 0 bis 9. Kleinbuchstaben sind erlaubt, Trennzeichen zählen nicht mit.
-              Ist der Wert leer oder zu kurz, erzeugt der Container selbst einen Code. Sobald ein Konto existiert, wird die Variable ignoriert;
+              Ersetze den Platzhalter durch deinen Code. Er braucht mindestens 12 Buchstaben von A bis Z oder Ziffern von 0 bis 9. Kleinbuchstaben sind erlaubt, Trennzeichen zählen nicht mit.
+              Ist der Wert leer oder zu kurz oder steht noch der Platzhalter da, erzeugt der Container selbst einen Code. Sobald ein Konto existiert, wird die Variable ignoriert;
               das steht beim nächsten Start im Protokoll.
             </p>
           </div>

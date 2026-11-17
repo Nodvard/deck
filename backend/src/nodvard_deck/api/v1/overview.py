@@ -319,7 +319,7 @@ async def overview(session: SessionDep, user: CurrentUser) -> OverviewOut:
     services: list[ServiceOut] = expensive["services"]
     return OverviewOut(
         services=services,
-        services_running=sum(1 for s in services if s.state == "running"),
+        services_running=sum(1 for s in services if s.state == "running" and s.tone != "warn"),
         services_unreachable_hosts=_unreachable_hosts(services),
         apps=await _app_tiles(session, services),
         backups=expensive["backups"],

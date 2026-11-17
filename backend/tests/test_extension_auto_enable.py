@@ -4,6 +4,7 @@ die Erweiterung nicht beim Namen, sondern liest `enable_on` im Manifest."""
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -220,3 +221,127 @@ def test_manifest_enable_on_is_validated():
 
     # Das mitgelieferte Terminal-Manifest nutzt es.
     assert load_manifest(REPO_EXTENSIONS_DIR / "terminal" / "extension.toml").enable_on == ["host_credential"]
+
+
+@pytest.mark.asyncio
+async def test_auto_enable_does_not_wait_for_the_module_lock_with_an_open_write(client, file_db, test_settings):
+    from nodvard_deck.ext.runtime import get_extension_runtime
+    from nodvard_deck.main import app
+
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    async with file_db() as session:
+        await extensions_service.discover_and_sync(session, test_settings)
+        await session.commit()
+
+    lock = get_extension_runtime().lock_for("terminal")
+    await lock.acquire()  # eine andere Anfrage schaltet das Modul gerade ein
+    blocked = file_db()
+    async with blocked as waiting:
+        waiting.add(Setting(key="test.offene-schreibung", scope="global", value={"v": 1}))
+        await waiting.flush()
+        task = asyncio.create_task(
+            extensions_service.auto_enable_for(app, waiting, test_settings, "host_credential")
+        )
+        await asyncio.sleep(0.3)  # wartet jetzt auf die Sperre
+        try:
+            async with file_db() as other:
+                other.add(Setting(key="test.andere-schreibung", scope="global", value={"v": 2}))
+                await asyncio.wait_for(other.commit(), timeout=2)  # die Sperre hält, wer sie braucht, muss schreiben können
+        finally:
+            lock.release()
+            await asyncio.wait_for(task, timeout=20)
+
+
+@pytest.mark.asyncio
+async def test_waiting_disable_holds_no_pool_connection(client, file_db, test_settings):
+    from nodvard_deck.main import app
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    async with file_db() as session:
+        await extensions_service.discover_and_sync(session, test_settings)
+        await session.commit()
+
+    lock = get_extension_runtime().lock_for("terminal")
+    await lock.acquire()
+    async with file_db() as waiting:
+        await extensions_service.get_record(waiting, "terminal")
+        waiting.add(Setting(key="test.offene-schreibung", scope="global", value={"v": 1}))
+        await waiting.flush()
+        task = asyncio.create_task(extensions_service.disable_extension(app, waiting, "terminal"))
+        await asyncio.sleep(0.3)
+        try:
+            async with file_db() as other:
+                other.add(Setting(key="test.andere-schreibung", scope="global", value={"v": 2}))
+                await asyncio.wait_for(other.commit(), timeout=2)
+        finally:
+            lock.release()
+            await asyncio.wait_for(task, timeout=20)
+
+
+@pytest.mark.asyncio
+async def test_waiting_enable_holds_no_pool_connection(client, file_db, test_settings):
+    from nodvard_deck.main import app
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    async with file_db() as session:
+        await extensions_service.discover_and_sync(session, test_settings)
+        await session.commit()
+
+    lock = get_extension_runtime().lock_for("terminal")
+    await lock.acquire()
+    async with file_db() as waiting:
+        await extensions_service.get_record(waiting, "terminal")
+        waiting.add(Setting(key="test.offene-schreibung", scope="global", value={"v": 1}))
+        await waiting.flush()
+        task = asyncio.create_task(extensions_service.enable_extension(app, waiting, test_settings, "terminal"))
+        await asyncio.sleep(0.3)
+        try:
+            async with file_db() as other:
+                other.add(Setting(key="test.andere-schreibung", scope="global", value={"v": 2}))
+                await asyncio.wait_for(other.commit(), timeout=2)
+        finally:
+            lock.release()
+            await asyncio.wait_for(task, timeout=20)
+
+
+@pytest.mark.asyncio
+async def test_aborted_disable_leaves_no_untouched_disabled_module(client, file_db, test_settings, monkeypatch):
+    from nodvard_deck.main import app
+
+    headers = await _owner(client)
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    async with file_db() as session:
+        await extensions_service.discover_and_sync(session, test_settings)
+        await session.commit()
+        await extensions_service.enable_extension(app, session, test_settings, "terminal")
+
+    async def abort(*_a, **_kw):
+        raise RuntimeError("Abbruch nach dem Schalten")
+
+    monkeypatch.setattr(extensions_service, "get_record", _after_disable(extensions_service.get_record, abort))
+    failed = await client.post("/api/v1/extensions/terminal/disable", headers=headers)
+    assert failed.status_code == 500
+    monkeypatch.undo()
+
+    async with file_db() as session:
+        await extensions_service.auto_enable_for(app, session, test_settings, "host_credential")
+        record = await extensions_service.get_record(session, "terminal")
+        untouched = await session.get(Setting, (extensions_service.UNTOUCHED_KEY_PREFIX + "terminal", "global", ""))
+    assert record.state == "disabled"
+    assert untouched is None
+
+
+def _after_disable(real, abort):
+    """Lässt `get_record` bis zum Schalten durch und bricht beim ersten Aufruf danach ab."""
+    state = {"calls": 0}
+
+    async def wrapper(session, ext_id):
+        record = await real(session, ext_id)
+        if record is not None and record.state == "disabled" and state["calls"] == 0 and not session.dirty:
+            state["calls"] += 1
+            await abort()
+        return record
+
+    return wrapper

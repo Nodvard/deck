@@ -310,9 +310,8 @@ async def test_switching_on_by_itself_writes_the_new_list(tmp_path, db_session, 
 
 
 @pytest.mark.asyncio
-async def test_switching_while_running_writes_nothing_to_the_database_before_the_caller_commits(tmp_path, db_session, test_settings, capsys):
-    # Die Zeile liest den Zustand im Speicher, ohne vorzeitig zu schreiben: Ein Schreibvorgang mitten im Ein- oder
-    # Ausschalten hielte die Sperre der Datenbank, waehrend noch Code der Erweiterung laeuft (siehe `enable_extension`).
+async def test_switching_commits_after_the_extension_code_has_run(tmp_path, db_session, test_settings, capsys):
+    # Der Zustand wird erst nach `on_stop` geschrieben, nie mitten im Code der Erweiterung (siehe `enable_extension`).
     _write_ext(tmp_path / "extensions", "a-ext")
     app, settings = await _first_boot_then_enable(tmp_path, db_session, test_settings, "a-ext")
     await _boot(app, db_session, settings)
@@ -322,8 +321,8 @@ async def test_switching_while_running_writes_nothing_to_the_database_before_the
 
     assert _loaded_lines(capsys) == ["Erweiterungen geladen: (keine)"]
     record = await db_session.get(ExtensionRecord, "a-ext")
-    assert record in db_session.dirty, "der neue Zustand ist noch nicht geschrieben, das macht der Aufrufer"
-    await db_session.commit()
+    assert record not in db_session.dirty, "der Dienst hat den neuen Zustand schon geschrieben"
+    assert record.state == "disabled"
 
 
 @pytest.mark.asyncio

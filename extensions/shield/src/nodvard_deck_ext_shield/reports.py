@@ -27,6 +27,7 @@ from .patching import schedule_zone
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
+    from nodvard_sdk.context import HostsHandle
 
 DEFAULT_CRON = "0 8 * * 1"
 RETENTION = timedelta(weeks=12)
@@ -161,6 +162,63 @@ def _finding(row: FindingRecord) -> dict:
     return {"id": row.id, "path": row.path, "signature": row.signature, "status": row.status}
 
 
+def _summary(rows: list[dict]) -> dict:
+    return {
+        "updates": sum(r["updates"]["open"] for r in rows if r["updates"]),
+        "security_updates": sum(r["updates"]["security"] or 0 for r in rows if r["updates"]),
+        "new_findings": sum(len(r["findings"]["new"]) for r in rows),
+        "resolved_findings": sum(len(r["findings"]["resolved"]) for r in rows),
+        "unknown_update_hosts": sum(r["updates"] is None for r in rows),
+        "unknown_security_update_hosts": sum(r["updates"] is None or r["updates"]["security"] is None for r in rows),
+    }
+
+
+def _latest(target: dict | None, source: dict | None, *fields: str) -> dict | None:
+    if target is None or source is None:
+        return target or source
+    target_time = next((target.get(field) for field in fields if target.get(field) is not None), 0)
+    source_time = next((source.get(field) for field in fields if source.get(field) is not None), 0)
+    return target if target_time >= source_time else source
+
+
+def _merge_host_rows(target: dict, source: dict) -> dict:
+    row = {**target}
+    row["updates"] = _latest(target["updates"], source["updates"], "checked_at")
+    row["scan"] = _latest(target["scan"], source["scan"], "finished_at", "started_at")
+    row["fail2ban"] = _latest(target["fail2ban"], source["fail2ban"], "checked_at")
+    row["lynis"] = _latest(target["lynis"], source["lynis"], "created_at")
+    row["findings"] = {
+        kind: list({finding["id"]: finding for finding in source["findings"][kind] + target["findings"][kind]}.values())
+        for kind in ("new", "resolved")
+    }
+    if (source.get("certificates_checked_at") or 0) > (target.get("certificates_checked_at") or 0):
+        row["expiring_certificates"] = source.get("expiring_certificates")
+        row["certificates_checked_at"] = source.get("certificates_checked_at")
+    return row
+
+
+async def _for_hosts(report: dict, hosts: HostsHandle, ids: set[str]) -> dict:
+    resolved = []
+    for row in report["hosts"]:
+        if row["host_id"] in ids:
+            resolved.append((row, True))
+            continue
+        host = await hosts.get(row["host_id"])
+        if host is not None and host.id in ids:
+            resolved.append(({**row, "host_id": host.id}, False))
+    rows_by_id = {}
+    for row, is_target in resolved:
+        current = rows_by_id.get(row["host_id"])
+        if current is None:
+            rows_by_id[row["host_id"]] = (row, is_target)
+        elif is_target:
+            rows_by_id[row["host_id"]] = (_merge_host_rows(row, current[0]), True)
+        else:
+            rows_by_id[row["host_id"]] = (_merge_host_rows(current[0], row), current[1])
+    rows = [row for row, _ in rows_by_id.values()]
+    return {**report, "hosts": rows, "host_count": len(rows), "summary": _summary(rows)}
+
+
 class WeeklyReports:
     def __init__(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
@@ -189,6 +247,8 @@ class WeeklyReports:
                     await db.flush()
                     older = select(WeeklyReportRecord.id).order_by(WeeklyReportRecord.created_at.desc()).offset(12)
                     await db.execute(delete(WeeklyReportRecord).where(WeeklyReportRecord.id.in_(older)))
+            else:
+                saved = await _for_hosts(saved, self._ctx.hosts, {h.id for h in await self._ctx.hosts.list()})
             await self._send(saved, now)
             return saved
 
@@ -231,16 +291,8 @@ class WeeklyReports:
                 "expiring_certificates": certs["items"] if certs else None,
                 "certificates_checked_at": certs["checked_at"] if certs else None,
             })
-        summary = {
-            "updates": sum(r["updates"]["open"] for r in rows if r["updates"]),
-            "security_updates": sum(r["updates"]["security"] or 0 for r in rows if r["updates"]),
-            "new_findings": sum(len(r["findings"]["new"]) for r in rows),
-            "resolved_findings": sum(len(r["findings"]["resolved"]) for r in rows),
-            "unknown_update_hosts": sum(r["updates"] is None for r in rows),
-            "unknown_security_update_hosts": sum(r["updates"] is None or r["updates"]["security"] is None for r in rows),
-        }
         return {"id": ident, "created_at": now.timestamp(), "period_start": start.timestamp(), "period_end": now.timestamp(),
-                "host_count": len(rows), "summary": summary, "hosts": rows, "certificates_note": CERTIFICATES_NOTE}
+                "host_count": len(rows), "summary": _summary(rows), "hosts": rows, "certificates_note": CERTIFICATES_NOTE}
 
     async def _send(self, report: dict, now: datetime) -> None:
         async with self._ctx.db.session() as db:
@@ -264,17 +316,25 @@ class WeeklyReports:
             await db.execute(update(WeeklyReportRecord).where(WeeklyReportRecord.id == report["id"]).values(notified_at=now))
 
     async def list(self, *, now: datetime | None = None) -> dict:
+        ids = {h.id for h in await self._ctx.hosts.list()}
         async with self._ctx.db.session() as db:
             rows = (await db.scalars(select(WeeklyReportRecord)
                                     .where(WeeklyReportRecord.created_at > (now or datetime.now(UTC)) - RETENTION)
                                     .order_by(WeeklyReportRecord.created_at.desc()).limit(12))).all()
-        return {"items": [{k: v for k, v in r.data.items() if k not in ("hosts", "certificates_note")} for r in rows],
+        items = []
+        for row in rows:
+            report = await _for_hosts(row.data, self._ctx.hosts, ids)
+            items.append({k: v for k, v in report.items() if k not in ("hosts", "certificates_note")})
+        return {"items": items,
                 "total": len(rows)}
 
     async def get(self, report_id: str, *, now: datetime | None = None) -> dict | None:
         async with self._ctx.db.session() as db:
             row = await db.get(WeeklyReportRecord, report_id)
-            return row.data if row and row.created_at > (now or datetime.now(UTC)) - RETENTION else None
+        if row and row.created_at > (now or datetime.now(UTC)) - RETENTION:
+            hosts = await self._ctx.hosts.list()
+            return await _for_hosts(row.data, self._ctx.hosts, {h.id for h in hosts})
+        return None
 
 
 def build_router(service: WeeklyReports) -> APIRouter:

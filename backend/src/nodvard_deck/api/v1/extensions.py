@@ -322,10 +322,11 @@ async def get_extension_frontend_bundle(ext_id: str, request: Request) -> Respon
 )
 async def disable_extension(ext_id: str, request: Request, session: SessionDep, user: CurrentUser) -> ExtensionOut:
     canonical, _ = await resolve_extension(session, ext_id, change=True)
+    # Vor dem Schalten: bricht die Anfrage danach ab, bleibt kein unberührtes, ausgeschaltetes Modul zurück.
+    await extensions_service.record_user_choice(session, canonical)
     await extensions_service.disable_extension(request.app, session, canonical)
     # Kein session.refresh(): die Zeile ist (Identity Map) dasselbe Objekt, das disable_extension() gerade geändert hat;
     # ein refresh() lüde den alten DB-Stand und überschriebe die noch nicht geflushte Änderung.
     record = await extensions_service.get_record(session, canonical)
-    await extensions_service.record_user_choice(session, canonical)
     await _audit_toggle(session, user, "extension.disabled", canonical, record)
     return ExtensionOut.from_model(record)

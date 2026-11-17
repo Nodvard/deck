@@ -29,6 +29,7 @@ from ..config import Settings
 from ..core import known_actors, rbac
 from ..core.events import get_event_bus
 from ..db import utcnow
+from ..db.session import release_connection
 from ..edition import of as edition_of
 from ..ext.context import build_context
 from ..ext.discovery import LEGACY_BLOCKING_PERMISSIONS, DiscoveredExtension, discover_all, resolve_legacy
@@ -60,6 +61,14 @@ async def get_record(session: AsyncSession, ext_id: str) -> ExtensionRecord | No
     """Die Registry-Zeile zu einer Kennung (heutige oder alte), ein verwaister Zwilling kommt nie zurück."""
     # Einzelzugriffe auf die Registry laufen nur hierüber, ein Test verbietet sie sonst.
     return await session.get(ExtensionRecord, get_extension_runtime().store_id(ext_id))
+
+
+async def _refresh_record(session: AsyncSession, ext_id: str) -> None:
+    """Liest die Zeile neu, falls die Sitzung sie schon vor dem Warten auf die Modulsperre geladen hatte; eigene
+    ungespeicherte Änderungen bleiben."""
+    record = await get_record(session, ext_id)
+    if record is not None and record not in session.dirty:
+        await session.refresh(record)
 
 
 async def get_records(session: AsyncSession, ext_ids: Iterable[str]) -> dict[str, ExtensionRecord]:
@@ -134,6 +143,8 @@ async def auto_enable_for(
                 continue
             # Gilt auch bei Fehlschlag als entschieden: ein zweiter Versuch beim nächsten Zugang wäre nur Lärm.
             await _clear_untouched(session, record.id)
+            # Wer die Modulsperre hält, muss noch schreiben können; offene Schreibvorgänge hier würden ihn aussperren.
+            await release_connection(session)
             try:
                 await enable_extension(app, session, settings, ext_id)
             except Exception:  # noqa: BLE001 - der Aufrufer darf daran nie scheitern
@@ -583,7 +594,14 @@ async def enable_extension(
 ) -> None:
     """Lädt die Erweiterung (`ext_id` darf eine alte Kennung sein) und setzt `state`; mit `at_boot=True` behält
     eine fehlende ihren Zustand."""
-    await _enable_extension(app, session, settings, ext_id, at_boot=at_boot)
+    runtime = get_extension_runtime()
+    # Wartende Anfragen halten sonst je eine Poolverbindung, solange der Besitzer der Sperre noch im Fremdcode hängt.
+    await release_connection(session)
+    async with runtime.lock_for(runtime.canonical(ext_id)):
+        await _refresh_record(session, ext_id)
+        await _enable_extension(app, session, settings, ext_id, at_boot=at_boot)
+        # Vor der Freigabe der Sperre, sonst liest ein wartendes Ausschalten noch den alten Zustand.
+        await session.commit()
     if not at_boot:
         await _announce_current(session)
 
@@ -942,13 +960,19 @@ async def _cleanup_loaded(app: FastAPI, loaded: LoadedExtension) -> None:
 
 
 async def disable_extension(app: FastAPI, session: AsyncSession, ext_id: str) -> None:
-    ext_id = get_extension_runtime().canonical(ext_id)
-    await _unload_extension(app, session, ext_id)
+    runtime = get_extension_runtime()
+    ext_id = runtime.canonical(ext_id)
+    # Wartende Anfragen halten sonst je eine Poolverbindung, solange der Besitzer der Sperre noch im Fremddienst hängt.
+    await release_connection(session)
+    async with runtime.lock_for(ext_id):
+        await _refresh_record(session, ext_id)
+        await _unload_extension(app, session, ext_id)
 
-    record = await get_record(session, ext_id)
-    if record is not None:
-        record.state = "disabled"
-        record.last_error = None
-        record.last_error_at = None
-        await get_event_bus().publish(Event(name="extension.disabled", payload={"ext_id": ext_id}))
+        record = await get_record(session, ext_id)
+        if record is not None:
+            record.state = "disabled"
+            record.last_error = None
+            record.last_error_at = None
+            await get_event_bus().publish(Event(name="extension.disabled", payload={"ext_id": ext_id}))
+        await session.commit()
     await _announce_current(session)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -94,6 +95,9 @@ Proxmox zeigt ihn gelb, nicht rot."""
 CAUSE_CACHE_SIZE = 64
 """So viele Protokolle fehlgeschlagener Läufe bleiben im Speicher (nur die Zeilen für `explain`); ein beendeter Lauf
 ändert sein Protokoll nicht mehr."""
+LOG_FAILURE_CACHE_SECONDS = 60
+GUEST_FINISHED_RE = re.compile(r"^INFO: Finished Backup of VM (\d+)\b")
+GUEST_FAILED_RE = re.compile(r"^ERROR: Backup of VM (\d+) failed\b")
 
 
 def _task_status(task: dict[str, Any] | None) -> str:
@@ -101,6 +105,8 @@ def _task_status(task: dict[str, Any] | None) -> str:
         return "unknown"
     if "endtime" not in task:
         return "running"
+    if "guest_status" in task:
+        return task["guest_status"]
     status = str(task.get("status") or "")
     return "ok" if status == "OK" or WARNINGS_RE.fullmatch(status) else "failed"
 
@@ -114,7 +120,60 @@ class ProxmoxBackupProvider:
     def __init__(self, ctx: Any, connectors_factory: ConnectorsFactory) -> None:
         self._ctx = ctx
         self._connectors_factory = connectors_factory
-        self._logs: dict[tuple[str, str], list[str]] = {}
+        self._logs: dict[tuple[str, str], tuple[float | None, list[str] | None]] = {}
+
+    async def _task_log(
+        self, connection: str, connector: ProxmoxBackupConnector, task: dict[str, Any],
+    ) -> list[str] | None:
+        upid, node = str(task.get("upid") or ""), str(task.get("node") or "")
+        if not upid or not node:
+            return None
+        key = (connection, upid)
+        cached = self._logs.get(key)
+        if cached is not None and (cached[0] is None or cached[0] > time.monotonic()):
+            return cached[1]
+        if cached is not None:
+            del self._logs[key]
+        if key not in self._logs:
+            try:
+                lines = relevant_lines(await connector.task_log(node, upid))
+            except ProxmoxBackupApiError:
+                self._remember_log(key, time.monotonic() + LOG_FAILURE_CACHE_SECONDS, None)
+                return None
+            self._remember_log(key, None, lines)
+        return self._logs[key][1]
+
+    def _remember_log(self, key: tuple[str, str], expires_at: float | None, lines: list[str] | None) -> None:
+        if len(self._logs) >= CAUSE_CACHE_SIZE:
+            self._logs.pop(next(iter(self._logs)))
+        self._logs[key] = (expires_at, lines)
+
+    async def _guest_tasks(
+        self, connection: str, connector: ProxmoxBackupConnector, tasks: list[dict[str, Any]], vmid: str,
+        *, group_job: dict[str, Any] | None = None,
+        results: dict[tuple[str, str], dict[str, str]] | None = None,
+    ) -> list[dict[str, Any]]:
+        if results is None:
+            results = {}
+        matching = _vzdump_tasks(tasks, vmid, group_job=group_job)
+        resolved = []
+        found_ok = False
+        for task in matching:
+            if task.get("id") or _task_status(task) != "failed" or found_ok:
+                resolved.append(task)
+                found_ok = found_ok or _task_status(task) == "ok"
+                continue
+            key = (str(task.get("node") or ""), str(task.get("upid") or ""))
+            if key not in results:
+                statuses: dict[str, str] = {}
+                for line in await self._task_log(connection, connector, task) or []:
+                    if match := GUEST_FINISHED_RE.search(line):
+                        statuses.setdefault(match.group(1), "ok")
+                    if match := GUEST_FAILED_RE.search(line):
+                        statuses[match.group(1)] = "failed"
+                results[key] = statuses
+            resolved.append({**task, "guest_status": results[key].get(str(vmid), "job_error")})
+        return resolved
 
     async def _vm_name_and_host(self, connection: str, vmid: str) -> tuple[str, str | None]:
         """Klarname und Host-ID aus `Host.provider_ref` (`<connection>/qemu|lxc/<node>/<vmid>`), sonst "VM <vmid>"."""
@@ -142,12 +201,13 @@ class ProxmoxBackupProvider:
                 rows.append(unreachable_row(connection, str(exc)))
                 continue
 
+            results: dict[tuple[str, str], dict[str, str]] = {}
             for job in jobs:
                 vmids = job_vmids(job, resources)
                 group = job if len(vmids) > 1 else None
                 for vmid in vmids:
                     name, host_id = await self._vm_name_and_host(connection, vmid)
-                    latest = _vzdump_tasks(tasks, vmid, group_job=group)
+                    latest = await self._guest_tasks(connection, connector, tasks, vmid, group_job=group, results=results)
                     latest_task = latest[0] if latest else None
                     # Letzter erfolgreicher Lauf (der letzte kann fehlgeschlagen sein), Grundlage für „Backup zu alt“
                     # im Wächter; als Zeitpunkt zählt das Ende des Laufs, sonst sein Beginn.
@@ -253,7 +313,9 @@ class ProxmoxBackupProvider:
             raise NodvardError(f"Backup-Verbindung '{connection}' ist nicht (mehr) konfiguriert.")
         return connector
 
-    async def _job_tasks(self, connector: ProxmoxBackupConnector, job_id: str, vmid: str) -> list[dict[str, Any]]:
+    async def _job_tasks(
+        self, connection: str, connector: ProxmoxBackupConnector, job_id: str, vmid: str,
+    ) -> list[dict[str, Any]]:
         """Die Läufe eines Jobs für diesen Gast, neueste zuerst."""
         tasks = await connector.list_tasks()
         job = next((j for j in await connector.list_jobs() if str(j.get("id")) == job_id), None)
@@ -261,7 +323,7 @@ class ProxmoxBackupProvider:
         needs_resources = job is not None and not str(job.get("vmid") or "").strip()
         resources = await connector.guest_resources() if needs_resources else []
         group = job if job is not None and len(job_vmids(job, resources)) > 1 else None
-        return _vzdump_tasks(tasks, vmid, group_job=group)
+        return await self._guest_tasks(connection, connector, tasks, vmid, group_job=group)
 
     async def job_history(self, job_ref: str) -> list[dict[str, Any]]:
         connection, job_id, vmid = _parse_job_ref(job_ref)
@@ -276,7 +338,7 @@ class ProxmoxBackupProvider:
                 # Geklappt, aber mit Warnungen (Anzahl), sonst nicht gesetzt.
                 **({"warnings": warnings} if (warnings := _task_warnings(t)) is not None else {}),
             }
-            for t in await self._job_tasks(connector, job_id, vmid)
+            for t in await self._job_tasks(connection, connector, job_id, vmid)
         ]
 
     async def failure_cause(self, job_ref: str, upid: str | None = None) -> dict[str, Any] | None:
@@ -286,23 +348,14 @@ class ProxmoxBackupProvider:
         connection, job_id, vmid = _parse_job_ref(job_ref)
         connector = await self._connector_for(connection)
         task = next(
-            (t for t in await self._job_tasks(connector, job_id, vmid)
+            (t for t in await self._job_tasks(connection, connector, job_id, vmid)
              if _task_status(t) == "failed" and (upid is None or t.get("upid") == upid)),
             None,
         )
         if task is None:
             return None
         task_upid, node = str(task.get("upid") or ""), str(task.get("node") or "")
-        lines = self._logs.get((connection, task_upid))
-        if lines is None and task_upid and node:
-            try:
-                lines = relevant_lines(await connector.task_log(node, task_upid))
-            except ProxmoxBackupApiError:
-                lines = None
-            else:
-                if len(self._logs) >= CAUSE_CACHE_SIZE:
-                    self._logs.pop(next(iter(self._logs)))
-                self._logs[(connection, task_upid)] = lines
+        lines = await self._task_log(connection, connector, task)
         return {
             "upid": task_upid, "node": node, "started_at": task.get("starttime"), "finished_at": task.get("endtime"),
             "status": task.get("status"), "log_readable": lines is not None,

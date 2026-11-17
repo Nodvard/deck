@@ -770,3 +770,198 @@ async def test_a_new_installation_starts_both_modules_off(client, db_session, te
     assert (await db_session.get(ExtensionRecord, "pihole")).state == "disabled"
     assert (await db_session.get(ExtensionRecord, "network")).state == "disabled"
     assert (await db_session.execute(select(AuditEntry).where(AuditEntry.action == "extension.adopted"))).scalars().all() == []
+
+
+DUMMY_USER = "deck-leser"
+DUMMY_PASSWORD = "dummy-zugang-789"
+
+
+async def _viewer(client, headers) -> dict:
+    roles = {r["name"]: r["id"] for r in (await client.get("/api/v1/roles", headers=headers)).json()}
+    created = await client.post(
+        "/api/v1/users", json={"username": "gast", "password": "gast-passwort-1", "role_ids": [roles["viewer"]]}, headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    login = await client.post("/api/v1/auth/login", json={"username": "gast", "password": "gast-passwort-1"})
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+async def _reader_texts(client, headers, viewer) -> str:
+    texts = []
+    for path in ("summary", "widgets/status"):
+        res = await client.get(f"/api/v1/ext/pihole/{path}", headers=viewer)
+        assert res.status_code == 200, res.text
+        texts.append(res.text)
+    texts.append((await client.get("/api/v1/apps/suggestions", headers=headers)).text)
+    loaded = get_extension_runtime().loaded["pihole"]
+    texts.append((await loaded.instance.health(loaded.ctx)).message or "")
+    return "\n".join(texts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", [
+    f"http://{DUMMY_USER}:{DUMMY_PASSWORD}@pihole.test/admin/",
+    f"{DUMMY_USER}:{DUMMY_PASSWORD}@pihole.test",
+    f"https://{DUMMY_PASSWORD}@pihole.test:8443",
+])
+async def test_address_with_credentials_is_refused_when_saving(client, db_session, test_settings, url):
+    headers, fake = await _enable(client, db_session, test_settings)
+    res = await client.put(
+        "/api/v1/extensions/pihole/settings", json={"current_password": "correct-horse-battery", "values": {"url": url}}, headers=headers,
+    )
+    assert res.status_code == 422, res.text
+    assert "Benutzername oder Passwort" in res.json()["detail"]
+    assert DUMMY_PASSWORD not in res.text and DUMMY_USER not in res.text
+    stored = (await client.get("/api/v1/extensions/pihole/settings", headers=headers)).json()
+    assert DUMMY_PASSWORD not in json.dumps(stored)
+    assert fake.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["http://pihole.test:8080/admin/", "192.0.2.10", "https://[2001:db8::1]:8443/pihole"])
+async def test_normal_addresses_are_still_accepted(client, db_session, test_settings, url):
+    headers, _ = await _enable(client, db_session, test_settings)
+    res = await client.put(
+        "/api/v1/extensions/pihole/settings", json={"current_password": "correct-horse-battery", "values": {"url": url}}, headers=headers,
+    )
+    assert res.status_code == 200, res.text
+
+
+@pytest.mark.asyncio
+async def test_stored_address_with_credentials_never_reaches_readers(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    loaded = get_extension_runtime().loaded["pihole"]
+    await loaded.ctx.settings.set({"url": f"http://{DUMMY_USER}:{DUMMY_PASSWORD}@pihole.test/admin/"})
+    viewer = await _viewer(client, headers)
+
+    summary = (await client.get("/api/v1/ext/pihole/summary", headers=viewer)).json()
+    assert summary["state"] == "ok", summary
+    assert summary["url"] == PIHOLE_URL
+    suggestions = (await client.get("/api/v1/apps/suggestions", headers=headers)).json()["suggestions"]
+    assert [s["url"] for s in suggestions if s["source"] == "Pi-hole"] == ["http://pihole.test/admin/"]
+    text = await _reader_texts(client, headers, viewer)
+    assert DUMMY_PASSWORD not in text and DUMMY_USER not in text
+
+    # Die Verbindung selbst nutzt die gespeicherte Adresse weiter.
+    assert fake.requests and all(r.url.host == "pihole.test" for r in fake.requests)
+
+    fake.down = True
+    text = await _reader_texts(client, headers, viewer)
+    assert "nicht erreichbar" in text
+    assert DUMMY_PASSWORD not in text and DUMMY_USER not in text
+
+
+@pytest.mark.asyncio
+async def test_summary_uses_one_settings_snapshot_for_client_and_url(client, db_session, test_settings, monkeypatch):
+    headers, _ = await _enable(client, db_session, test_settings)
+    loaded = get_extension_runtime().loaded["pihole"]
+    settings = loaded.ctx.settings
+    old_url = f"http://{DUMMY_USER}:{DUMMY_PASSWORD}@pihole.test/admin/"
+    await settings.set({"url": old_url})
+    original_get = settings.get
+    changed = False
+
+    async def get_and_change() -> dict:
+        nonlocal changed
+        values = await original_get()
+        if not changed:
+            changed = True
+            await settings.set({"url": "http://new-pihole.test"})
+        return values
+
+    monkeypatch.setattr(settings, "get", get_and_change)
+    summary = (await client.get("/api/v1/ext/pihole/summary", headers=headers)).json()
+
+    assert changed and (await original_get())["url"] == "http://new-pihole.test"
+    assert summary["url"] == PIHOLE_URL
+    assert DUMMY_PASSWORD not in json.dumps(summary) and DUMMY_USER not in json.dumps(summary)
+
+
+@pytest.mark.asyncio
+async def test_unusable_stored_address_is_not_quoted_with_credentials(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    loaded = get_extension_runtime().loaded["pihole"]
+    viewer = await _viewer(client, headers)
+    for url in (f"ftp://{DUMMY_USER}:{DUMMY_PASSWORD}@pihole.test", f"http://{DUMMY_USER}:{DUMMY_PASSWORD}@"):
+        await loaded.ctx.settings.set({"url": url})
+        summary = (await client.get("/api/v1/ext/pihole/summary", headers=viewer)).json()
+        assert summary["invalid"] is True and "ist ungültig" in summary["message"], summary
+        text = await _reader_texts(client, headers, viewer)
+        assert DUMMY_PASSWORD not in text and DUMMY_USER not in text, url
+    await loaded.ctx.settings.set({"url": "ftp://pihole.test"})
+    summary = (await client.get("/api/v1/ext/pihole/summary", headers=viewer)).json()
+    assert "„ftp://pihole.test“" in summary["message"]
+    assert fake.requests == []
+
+
+@pytest.mark.asyncio
+async def test_parser_error_does_not_expose_stored_pihole_address(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    loaded = get_extension_runtime().loaded["pihole"]
+    await loaded.ctx.settings.set({"url": "http://[" + DUMMY_USER + ":dummy-zugang]#rest@pihole.test"})
+    viewer = await _viewer(client, headers)
+
+    summary = await client.get("/api/v1/ext/pihole/summary", headers=viewer)
+    tile = await client.get("/api/v1/ext/pihole/widgets/status", headers=viewer)
+
+    assert summary.json()["invalid"] is True
+    assert all(part not in summary.text for part in ("deck-leser", "dummy-zugang", "rest", "pihole.test"))
+    assert all(part not in tile.text for part in ("deck-leser", "dummy-zugang", "rest", "pihole.test"))
+
+
+TRICKY_PASSWORDS = ["teil-eins/teil-zwei", "teil-eins#teil-zwei", "teil-eins?teil-zwei", "teil-eins@teil-zwei"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("password", TRICKY_PASSWORDS)
+async def test_password_with_url_characters_is_refused_when_saving(client, db_session, test_settings, password):
+    headers, fake = await _enable(client, db_session, test_settings)
+    url = f"http://{DUMMY_USER}:{password}@pihole.test"
+    res = await client.put(
+        "/api/v1/extensions/pihole/settings", json={"current_password": "correct-horse-battery", "values": {"url": url}}, headers=headers,
+    )
+    assert res.status_code == 422, res.text
+    assert "teil-eins" not in res.text and "teil-zwei" not in res.text
+    assert fake.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("password", TRICKY_PASSWORDS)
+async def test_stored_password_with_url_characters_never_reaches_readers(client, db_session, test_settings, password):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    loaded = get_extension_runtime().loaded["pihole"]
+    await loaded.ctx.settings.set({"url": f"http://{DUMMY_USER}:{password}@pihole.test"})
+    viewer = await _viewer(client, headers)
+    text = await _reader_texts(client, headers, viewer)
+    assert "teil-eins" not in text and "teil-zwei" not in text and DUMMY_USER not in text
+
+
+WIDE_AT_SIGNS = [chr(0xFF20), chr(0xFE6B)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("at", WIDE_AT_SIGNS)
+async def test_wide_at_sign_is_refused_when_saving(client, db_session, test_settings, at):
+    headers, fake = await _enable(client, db_session, test_settings)
+    url = f"http://{DUMMY_USER}:teil-eins{at}pihole.test"
+    res = await client.put(
+        "/api/v1/extensions/pihole/settings", json={"current_password": "correct-horse-battery", "values": {"url": url}}, headers=headers,
+    )
+    assert res.status_code == 422, res.text
+    assert "teil-eins" not in res.text and DUMMY_USER not in res.text
+    assert fake.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("at", WIDE_AT_SIGNS)
+@pytest.mark.parametrize("password", ["teil-eins", "teil-eins/teil-zwei"])
+async def test_stored_wide_at_sign_never_reaches_readers(client, db_session, test_settings, at, password):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    loaded = get_extension_runtime().loaded["pihole"]
+    await loaded.ctx.settings.set({"url": f"http://{DUMMY_USER}:{password}{at}pihole.test"})
+    viewer = await _viewer(client, headers)
+    text = await _reader_texts(client, headers, viewer)
+    assert "teil-eins" not in text and "teil-zwei" not in text and DUMMY_USER not in text

@@ -33,11 +33,15 @@ def reports(monkeypatch):
 
 @pytest_asyncio.fixture
 async def ctx(reports):
+    from nodvard_deck.db import Base as CoreBase
+    from nodvard_deck.db.session import reset_engine_cache, set_engine_for_testing
     from nodvard_deck_ext_shield.models import Base
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
+        await connection.run_sync(CoreBase.metadata.create_all)
         await connection.run_sync(Base.metadata.create_all)
+    set_engine_for_testing(engine)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     active = []
 
@@ -60,13 +64,19 @@ async def ctx(reports):
     context = SimpleNamespace(
         db=SimpleNamespace(session=session),
         settings=SimpleNamespace(get=AsyncMock(side_effect=lambda: dict(values)), core=AsyncMock(return_value="Europe/Berlin")),
-        hosts=SimpleNamespace(list=AsyncMock(return_value=[Host(id="pi", name="pi", display_name="Pi", address="pi")])),
+        hosts=SimpleNamespace(
+            list=AsyncMock(return_value=[Host(id="pi", name="pi", display_name="Pi", address="pi")]),
+            get=AsyncMock(side_effect=lambda host_id: next(
+                (host for host in context.hosts.list.return_value if host.id == host_id), None
+            )),
+        ),
         notify=SimpleNamespace(send=AsyncMock(side_effect=notify)),
         exec=SimpleNamespace(run=AsyncMock(side_effect=AssertionError("Keine Serverabfragen"))),
         values=values, sent=sent,
     )
     yield context
     await engine.dispose()
+    reset_engine_cache()
 
 
 async def _seed(ctx):
@@ -186,6 +196,110 @@ async def test_snapshot_is_immutable_once_per_local_week(reports, ctx):
     assert ctx.sent[0].correlation_id == f"shield-weekly:{first['id']}"
     assert "9" in ctx.sent[0].body and "3" in ctx.sent[0].body
     assert ctx.notify.send.call_args.kwargs == {"raise_on_failure": True}
+
+
+@pytest.mark.parametrize("read", ["detail", "list", "generate", "retry"])
+async def test_saved_report_ignores_deleted_hosts_and_recounts_remaining_hosts(reports, ctx, read):
+    from nodvard_deck_ext_shield.models import WeeklyReportRecord
+
+    await _seed(ctx)
+    nas = Host(id="nas", name="nas", display_name="NAS", address="nas")
+    ctx.hosts.list.return_value.append(nas)
+    service = reports.WeeklyReports(ctx)
+    if read == "retry":
+        ctx.notify.send.side_effect = RuntimeError("Kanal ausgefallen")
+        with pytest.raises(RuntimeError, match="Kanal ausgefallen"):
+            await service.generate(now=NOW)
+        ctx.notify.send.side_effect = None
+    else:
+        await service.generate(now=NOW)
+    async with ctx.db.session() as db:
+        saved = (await db.get(WeeklyReportRecord, "2026-11-09")).data
+    assert saved["host_count"] == 2 and saved["summary"]["updates"] == 9
+    ctx.values["av_host_tag"] = "andere-markierung"
+    ctx.hosts.list.return_value = [nas.model_copy(update={"has_credential": False})]
+    ctx.hosts.list.reset_mock()
+    if read == "detail":
+        result = await service.get(saved["id"], now=NOW)
+    elif read == "list":
+        result = (await service.list(now=NOW))["items"][0]
+    else:
+        result = await service.generate(now=NOW + timedelta(hours=1))
+    assert result["host_count"] == 1
+    assert result["summary"] == {"updates": 0, "security_updates": 0, "new_findings": 0, "resolved_findings": 0,
+                                 "unknown_update_hosts": 1, "unknown_security_update_hosts": 1}
+    if read != "list":
+        assert [r["host_id"] for r in result["hosts"]] == ["nas"]
+    ctx.hosts.list.assert_awaited_once_with()
+    if read == "retry":
+        notification = ctx.notify.send.call_args.args[0]
+        assert notification.body.startswith("1 Server: 0 offene Updates")
+        assert notification.payload["host_id"] == "nas"
+    async with ctx.db.session() as db:
+        assert (await db.get(WeeklyReportRecord, saved["id"])).data == saved
+
+
+async def test_saved_report_keeps_host_after_real_merge(reports, ctx, test_settings, tmp_path):
+    from nodvard_deck.services import hosts
+    from nodvard_deck.services.host_merge import merge_discovered
+    from nodvard_sdk import DiscoveredHost
+    from test_ext_context import _build
+
+    _, _, context = _build(
+        tmp_path, ext_id="shield", permissions=["hosts.read", "hosts.write", "notify.send"], settings=test_settings,
+    )
+
+    @asynccontextmanager
+    async def extension_session():
+        async with ctx.db.session() as db:
+            yield db
+
+    context.db = SimpleNamespace(session=extension_session)
+    discovered = (await context.hosts.upsert_discovered([DiscoveredHost(
+        name="entdeckt", display_name="Entdeckt", address="192.0.2.20", provider_ref="node/100",
+        metadata={"identity_addresses": ["192.0.2.20"]},
+    )]))[0]
+    async with ctx.db.session() as db:
+        from nodvard_deck_ext_shield.models import FindingRecord
+
+        await hosts.add_credential(
+            db, test_settings, host_id=discovered.id, kind="ssh_password", username="admin", port=22,
+            secret_value="test-password",
+        )
+        db.add(FindingRecord(
+            id="fund-vom-quellserver", host_id=discovered.id, host_name="Entdeckt", path="/tmp/fund",
+            signature="Test.Signature", detected_at=NOW - timedelta(days=1), status="detected",
+        ))
+        manual = await hosts.create_host(db, name="von-hand", address="192.0.2.99")
+        await hosts.add_credential(
+            db, test_settings, host_id=manual.id, kind="ssh_password", username="admin", port=22,
+            secret_value="test-password",
+        )
+        manual_id = manual.id
+    service = reports.WeeklyReports(context)
+    service._send = AsyncMock()
+    saved = await service.generate(now=NOW)
+    assert {row["host_id"] for row in saved["hosts"]} == {discovered.id, manual_id}
+    assert saved["host_count"] == 2
+
+    async with ctx.db.session() as db:
+        manual = await db.get(hosts.Host, manual_id)
+        manual.address = "192.0.2.20"
+        await db.flush()
+        assert await merge_discovered(db) == {discovered.id: manual.id}
+
+    detail = await service.get(saved["id"], now=NOW)
+    listing = (await service.list(now=NOW))["items"][0]
+    generated = await service.generate(now=NOW + timedelta(hours=1))
+    assert detail is not None
+    for result in (detail, generated):
+        assert [row["host_id"] for row in result["hosts"]] == [manual_id]
+        assert result["hosts"][0]["host_name"] == "von-hand"
+        assert [finding["id"] for finding in result["hosts"][0]["findings"]["new"]] == ["fund-vom-quellserver"]
+        assert result["host_count"] == 1
+        assert result["summary"]["new_findings"] == 1
+    assert listing["host_count"] == 1
+    assert listing["summary"]["new_findings"] == 1
 
 
 async def test_report_week_uses_installation_timezone(reports, ctx):

@@ -152,3 +152,72 @@ async def test_mfa_token_cannot_be_used_as_access_token(client):
 
     r = await client.get("/api/v1/me", headers=_auth_header(mfa_token))
     assert r.status_code == 401
+
+
+async def _two_sessions(client):
+    await client.post(
+        "/api/v1/auth/bootstrap",
+        json={"username": "nico", "password": "correct-horse-battery", "setup_code": "TEST-CODE-2345"},
+    )
+    phone = await client.post(
+        "/api/v1/auth/login",
+        json={"username": "nico", "password": "correct-horse-battery", "client_type": "android"},
+    )
+    web = await client.post("/api/v1/auth/login", json={"username": "nico", "password": "correct-horse-battery"})
+    return phone.json(), web.json()["access_token"]
+
+
+async def _start(client, token):
+    setup = await client.post(
+        "/api/v1/me/totp/setup", json={"current_password": "correct-horse-battery"}, headers=_auth_header(token)
+    )
+    return setup.json()["secret"]
+
+
+@pytest.mark.asyncio
+async def test_enabling_2fa_signs_out_other_sessions(client):
+    phone, web = await _two_sessions(client)
+    secret = await _start(client, web)
+    confirm = await client.post(
+        "/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=_auth_header(web)
+    )
+    assert confirm.status_code == 200
+    refreshed = await client.post("/api/v1/auth/refresh", json={"refresh_token": phone["refresh_token"]})
+    assert refreshed.status_code == 401
+    assert (await client.get("/api/v1/me", headers=_auth_header(phone["access_token"]))).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_enabling_2fa_keeps_the_current_session(client):
+    _, web = await _two_sessions(client)
+    secret = await _start(client, web)
+    await client.post("/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=_auth_header(web))
+    assert (await client.get("/api/v1/me", headers=_auth_header(web))).status_code == 200
+    assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_enabling_2fa_logs_the_signed_out_sessions(client, db_session):
+    from nodvard_deck.models import AuditEntry
+    from sqlalchemy import select
+
+    _, web = await _two_sessions(client)
+    secret = await _start(client, web)
+    await client.post("/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=_auth_header(web))
+    entry = (
+        await db_session.execute(
+            select(AuditEntry).where(AuditEntry.action == "auth.recovery_codes_generated")
+        )
+    ).scalar_one()
+    assert entry.detail == {"reason": "2fa_enabled", "signed_out_sessions": 1}
+
+
+@pytest.mark.asyncio
+async def test_failed_2fa_confirm_signs_out_nobody(client):
+    phone, web = await _two_sessions(client)
+    await _start(client, web)
+    wrong = await client.post("/api/v1/me/totp/confirm", json={"code": "000000"}, headers=_auth_header(web))
+    assert wrong.status_code == 400
+    assert (await client.get("/api/v1/me", headers=_auth_header(phone["access_token"]))).status_code == 200
+    refreshed = await client.post("/api/v1/auth/refresh", json={"refresh_token": phone["refresh_token"]})
+    assert refreshed.status_code == 200

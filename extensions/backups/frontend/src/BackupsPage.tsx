@@ -323,11 +323,13 @@ function historyLabel(h: HistoryEntry): string {
 
 const STATUS_LABEL: Record<string, string> = {
   ok: "OK", failed: "Fehlgeschlagen", running: "Läuft", unknown: "Unbekannt",
+  job_error: "Job mit Fehlern, Gast unklar",
 };
 
 const STATUS_CLASS: Record<string, string> = {
   ok: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
   failed: "bg-red-500/15 text-red-300 border-red-500/40",
+  job_error: "bg-amber-500/15 text-amber-300 border-amber-500/40",
   running: "bg-amber-500/15 text-amber-300 border-amber-500/40",
   unknown: "bg-white/10 opacity-70",
 };
@@ -830,7 +832,7 @@ export function BackupsPage(): JSX.Element {
   // zeigen, nicht als Job (kein Verlauf, kein "Erneut versuchen").
   const unreachable = allJobs?.filter((j) => j.last_status === "unreachable") ?? [];
   const jobs = allJobs ? allJobs.filter((j) => j.last_status !== "unreachable") : null;
-  const failing = jobs?.filter((j) => j.last_status === "failed" || j.last_status === "unknown").length ?? 0;
+  const failing = jobs?.filter((j) => j.last_status === "failed" || j.last_status === "unknown" || j.last_status === "job_error").length ?? 0;
   const { inventory, orphans, error: inventoryError, reload: reloadInventory } = useInventory();
   const visibleJobs = jobs && hostFilter ? jobs.filter((j) => j.host_id === hostFilter) : jobs;
 

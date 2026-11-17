@@ -4,8 +4,11 @@ die Ende-zu-Ende-Variante gegen eine echte laufende App."""
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
+from nodvard_deck.core import ws_hub
 from nodvard_deck.core.ws_hub import WsHub
 
 
@@ -136,3 +139,32 @@ async def test_connect_without_permissions_defaults_to_empty_list():
 
     await hub.publish("jobs.j1", {"status": "running"}, required_permission="jobs.read")
     assert sock.sent == []
+
+
+class _HangingSocket:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def send_json(self, data: dict) -> None:
+        await asyncio.Event().wait()
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_a_hanging_socket_is_dropped_and_others_still_receive(monkeypatch):
+    monkeypatch.setattr(ws_hub, "SEND_TIMEOUT_S", 0.05)
+    hub = WsHub()
+    hanging = _HangingSocket()
+    healthy = _FakeSocket()
+    conn_h = hub.connect(hanging, user_id="u1")
+    conn_ok = hub.connect(healthy, user_id="u2")
+    hub.subscribe(conn_h, "jobs.j1")
+    hub.subscribe(conn_ok, "jobs.j1")
+
+    await asyncio.wait_for(hub.publish("jobs.j1", {"n": 1}), timeout=2)
+
+    assert healthy.sent == [{"type": "event", "channel": "jobs.j1", "payload": {"n": 1}}]
+    assert hanging.closed
+    assert hub.subscriber_count("jobs.j1") == 1

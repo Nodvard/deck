@@ -10,6 +10,33 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.14.2] – 2026-11-17
+
+Security and bugfix release: Shield with deleted servers, first setup, two-factor login, credentials in service
+addresses, Nextcloud lockout, group backups and smaller fixes.
+
+### Upgrade notes
+
+- Only for installations that are not set up yet: a self-chosen setup code now needs at least 12 characters, otherwise
+  Deck uses a random code shown in the container log.
+
+### Fixed
+
+- Shield no longer lists or counts deleted servers; merged servers stay in reports with all findings.
+- Errors of Proxmox group backups only count for the guests that actually failed.
+- The start page no longer counts unhealthy containers as running.
+- The ntfy connection test reliably detects foreign servers and missing write access.
+- Turning on the same module twice at once loads it only once; a stalled browser tab no longer holds up live messages.
+
+### Security
+
+- Turning on two-factor login signs out all other devices.
+- First setup throttles wrong setup codes across all addresses, requires stronger self-chosen codes and creates only
+  one owner account.
+- Pi-hole and Nginx Proxy Manager reject addresses containing credentials and never show them to readers.
+- Deck no longer triggers a Nextcloud lockout by refreshing after rejected credentials.
+- Overly complex Compose files are rejected.
+
 ## [0.14.1] – 2026-11-15
 
 Bugfix release for 0.14: CVE matching, Shield with root login, pending updates on German systems, Docker 29 images,

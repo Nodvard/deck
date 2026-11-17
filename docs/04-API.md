@@ -150,6 +150,11 @@ POST /api/v1/auth/bootstrap      → {username, password, setup_code} → 201 {i
                                    Erstinbetriebnahme: legt den Owner an. Der `setup_code` steht im
                                    Container-Protokoll (oder `NODVARD_DECK_SETUP_CODE`). Fehlt/falsch: 403;
                                    zu viele Fehlversuche je IP (IPv6 je /64-Netz): 429; es gibt schon einen Nutzer: 409;
+                                   zusätzlich nach 100 falschen Codes in 60 Minuten über alle Adressen zusammen
+                                   429 für jede Adresse, auch mit richtigem Code (`login.locked` mit `scopes`
+                                   `setup`, `window_seconds` 3600; zusammen mit einer Grenze je IP dazu
+                                   `setup_window_seconds`). Ein richtiger Code zählt nicht mit, die Zähler liegen
+                                   im Speicher.
                                    zu viele Passwortprüfungen gleichzeitig: 503 wie bei `/auth/login`.
                                    Nach Erfolg wird der Code gelöscht.
                                    `username` wird getrimmt und klein geschrieben, hat 3 bis 64 Zeichen,
@@ -161,7 +166,7 @@ PUT/POST/DELETE /api/v1/auth/bootstrap/restore/…, POST /api/v1/auth/bootstrap/
                                    „System und Sicherungen“. NUR solange es kein Konto gibt (sonst 409) und
                                    NUR mit dem Einrichtungscode im Kopf `X-Setup-Code` – bei JEDEM Aufruf,
                                    geprüft **vor** dem Lesen des Bodys, gedrosselt wie `POST /auth/bootstrap`
-                                   (403 falsch/fehlt, 429 zu oft; gleicher Zähler je IP).
+                                   (403 falsch/fehlt, 429 zu oft; gleiche Zähler je IP und über alle Adressen).
 POST /api/v1/auth/refresh        → neuer Access-Token (+ rotierter Refresh-Token; in den 30 s nach
                                    einer Rotation liefert derselbe alte Token nur einen Access-Token,
                                    ohne Cookie und ohne `refresh_token` im Body);
@@ -188,7 +193,7 @@ gilt, solange das Konto irgendeine gültige Anmeldung hat, einer mit `sid` eines
 `POST /auth/logout` beendet die Anmeldung am Ende der Kette, auch mit einem schon erneuerten Refresh-Token, solange
 dessen Zeile noch steht: Das nächtliche Aufräumen löscht sie eine Refresh-Laufzeit nach dem Erneuern. Die Prüfung des
 Access-Tokens folgt höchstens 50 Erneuerungen (dahinter 401), Abmelden und das Abmelden der anderen Anmeldungen
-(Passwortwechsel, 2FA abschalten) höchstens 10 000; ist die Kette noch länger, enden zur Sicherheit alle Anmeldungen
+(Passwortwechsel, 2FA ein- oder abschalten) höchstens 10 000; ist die Kette noch länger, enden zur Sicherheit alle Anmeldungen
 des Kontos, auch die eigene. Die Kette wird jeweils in einer einzigen Datenbankabfrage gelesen.
 
 **Refresh-Cookie.** Das Cookie heißt `nodvard_deck_refresh`, Pfad `/api/v1/auth`, `HttpOnly`, `SameSite=Strict`,
@@ -291,7 +296,7 @@ POST   /me/recovery-codes           → {current_password, totp_code} → 200 {r
                                        Nutzer über alle zusammen: 10 Fehlversuche / 5 Min, dann 429 mit
                                        `Retry-After` (auch mit richtigem Passwort); der Beginn der Sperre steht als
                                        `auth.password_check_locked` im Protokoll.
-                                     → Abmelden (Passwortwechsel, Konto deaktivieren, 2FA abschalten/zurücksetzen,
+                                     → Abmelden (Passwortwechsel, Konto deaktivieren, 2FA einschalten/abschalten/zurücksetzen,
                                        Notfall-Befehl) widerruft die Refresh-Tokens sofort. Ein schon ausgestellter
                                        Access-Token gilt nur, solange seine Anmeldung (`sid`, auch nach Erneuerungen in
                                        einem anderen Tab) gilt, und bekommt danach sofort 401 (Abschnitt
@@ -1612,6 +1617,11 @@ deutscher Satz, nie Text von Proxmox.
 
 ### Proxmox-Backups: Wiederherstellen als Kopie und Fehlerursache (Erweiterung `backups`)
 
+`GET /ext/backups/jobs` und `GET /ext/backups/jobs/{job_ref}/history` liefern in `last_status` beziehungsweise `status`
+die Werte `ok`, `failed`, `running`, `unknown` und `job_error`. `job_error` bedeutet, dass der Proxmox-Sammeljob mit
+Fehlern endete, das Aufgabenprotokoll aber keinen Fehlschlag für diesen Gast belegt. Das gilt auch, wenn das Recht
+`Sys.Audit` zum Lesen des Protokolls fehlt. Dieser unklare Zustand löst keine Meldung für einen bestimmten Gast aus.
+
 ```
 GET  /ext/backups/restore/backups?connection=&vmid=&kind=   → 200 {vmid, name, kind, exists, backups[], errors[]}   Recht: hosts.execute
 GET  /ext/backups/restore/options?connection=&volid=        → 200 {kind, nodes[], suggested_vmid, suggested_name, blocked, refuse, warnings[], …}   Recht: hosts.execute
@@ -1988,6 +1998,7 @@ Statusabfrage für eigene Apps (kein SSRF); eine solche Prüfung wäre ein eigen
 `GET /overview` ist rein additiv erweitert: `services` und `services_running` bleiben wie sie waren (nur erkannte
 Dienste, die Kennzahl „Dienste“ zählt keine Links); neu ist `apps` – eigene Apps (`source: "custom"`, nach Position,
 immer frisch aus der Datenbank) vor den erkannten Diensten (`source: "detected"`, aus dem 30-s-Zwischenspeicher).
+Container mit fehlschlagendem Healthcheck zählen nicht als laufend.
 Felder: `id, source, name, url, host, host_id, state, tone, image, icon, color, group, open_in_new_tab, sort_order`
 (`null`, wo es für die Art nichts gibt). Wird ein Server gelöscht, bleibt seine App stehen, nur ohne `host_id`.
 Ebenfalls neu: `services[].unreachable` (`true` bei der Platzhalterkachel eines Servers, dessen Container nicht gelesen werden

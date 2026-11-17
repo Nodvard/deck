@@ -82,7 +82,7 @@ class Extension(NodvardExtension):
 
         @read_router.get("/serverinfo", response_model=ServerInfo)
         async def get_serverinfo(refresh: bool = False) -> ServerInfo:
-            # `refresh=true` überspringt den Zwischenspeicher; Probleme stehen in `state`, nicht im Statuscode.
+            # `refresh=true` überspringt den Zwischenspeicher, nicht aber die Pause nach abgelehnter Anmeldung; Probleme stehen in `state`.
             return await serverinfo.info(refresh=refresh)
 
         @read_router.get("/widgets/status")

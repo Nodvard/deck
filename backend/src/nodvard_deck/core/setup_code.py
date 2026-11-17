@@ -15,8 +15,16 @@ ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 GROUPS = 3
 GROUP_LEN = 4
 # `NODVARD_DECK_SETUP_CODE` (alt: `LATTICE_SETUP_CODE`) setzt den Code vorab (dann gibt es keine Datei); kürzere als
-# 8 Zeichen werden ignoriert, weil ein erratbarer Code den Zweck verfehlt.
-MIN_PRESET_LEN = 8
+# 12 Zeichen werden ignoriert, weil ein erratbarer Code den Zweck verfehlt. So lang ist auch der erzeugte.
+MIN_PRESET_LEN = 12
+# Beispielwerte aus Anleitung und Oberfläche, auch frühere: Wer sie abschreibt, hätte einen öffentlich bekannten Code.
+EXAMPLE_PRESETS = frozenset({
+    "HIEREIGENENCODEEINTRAGEN",
+    "PUTYOUROWNCODEHERE",
+    "MEINEIGENERCODE7392",
+    "MYOWNSETUPCODE7392",
+    "DEINEIGENERCODE",
+})
 # Klartext in `<data_dir>/setup_code.txt` (0600), kein Hash: Der Code muss bei jedem Start wieder ins Protokoll, und
 # ein bei jedem Neustart neu gewürfelter wäre lästig. Gleicher Schutz wie `master.key` daneben; nach der Einrichtung
 # wird die Datei gelöscht.
@@ -40,12 +48,23 @@ def code_file(data_dir: Path) -> Path:
     return data_dir / FILE_NAME
 
 
-def valid_preset(preset: str | None) -> str | None:
-    """Der vorgegebene Code (normalisiert) oder `None`, wenn keiner gesetzt oder er zu kurz ist."""
+def preset_problem(preset: str | None) -> str | None:
+    """`"too_short"` oder `"example"`, wenn ein gesetzter Code nicht gilt, sonst `None`."""
     if not preset:
         return None
     normalized = normalize(preset)
-    return normalized if len(normalized) >= MIN_PRESET_LEN else None
+    if len(normalized) < MIN_PRESET_LEN:
+        return "too_short"
+    if normalized in EXAMPLE_PRESETS:
+        return "example"
+    return None
+
+
+def valid_preset(preset: str | None) -> str | None:
+    """Der vorgegebene Code (normalisiert) oder `None`, wenn keiner gesetzt ist oder er nicht gilt."""
+    if not preset or preset_problem(preset) is not None:
+        return None
+    return normalize(preset)
 
 
 def read_file(data_dir: Path) -> str | None:

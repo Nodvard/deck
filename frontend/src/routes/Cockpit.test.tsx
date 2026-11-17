@@ -236,6 +236,22 @@ describe("Cockpit", () => {
     expect(screen.getByTestId("attention").textContent).toContain("Nichts offen");
   });
 
+  it("ungesunder Container ist eine Warnung und zählt nicht als laufender Dienst", async () => {
+    const base = respond("/api/v1/overview", "GET") as { services: Record<string, unknown>[] } & Record<string, unknown>;
+    const services = base.services.map((service, index) => index === 0
+      ? { ...service, state: "running", tone: "warn", name: "grafana" }
+      : service);
+    const overview = { ...base, services, services_running: 12, pending_actions: 0, attention: [] };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+
+    await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Eine Sache braucht deine Aufmerksamkeit"));
+    expect(screen.getByTestId("cockpit-status").textContent).not.toContain("Alles läuft rund");
+    expect(screen.getByTestId("stat-Dienste").textContent).toContain("12/14");
+    expect(screen.getByTestId("stat-Dienste").textContent).toContain("1 Container ist ungesund");
+    expect(screen.getByTestId("attention").textContent).toContain("Container ungesund: grafana");
+  });
+
   it("Hinweis „Server neu einrichten“: dezent, mit Link zur Einrichtung und zum Wegklicken, ohne „Nichts offen“", async () => {
     const hint = {
       host_id: "h-pi", host_name: "Heimserver", modules: ["Nodvard Shield", "Server-Zustand"], checked_at: new Date().toISOString(),

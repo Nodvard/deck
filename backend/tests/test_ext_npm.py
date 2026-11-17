@@ -613,3 +613,216 @@ async def test_npm_only_starts_where_it_was_in_use(client, db_session, test_sett
     db_session.expire_all()
     assert (await db_session.get(ExtensionRecord, "npm")).state == "disabled"
     assert "npm" not in get_extension_runtime().loaded
+
+
+DUMMY_USER = "deck-leser"
+DUMMY_PASSWORD = "dummy-zugang-789"
+
+
+async def _viewer(client, headers) -> dict:
+    roles = {r["name"]: r["id"] for r in (await client.get("/api/v1/roles", headers=headers)).json()}
+    created = await client.post(
+        "/api/v1/users", json={"username": "gast", "password": "gast-passwort-1", "role_ids": [roles["viewer"]]}, headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    login = await client.post("/api/v1/auth/login", json={"username": "gast", "password": "gast-passwort-1"})
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+async def _reader_texts(client, headers, viewer) -> str:
+    texts = []
+    for path in ("summary", "address-check", "widgets/certificates"):
+        res = await client.get(f"/api/v1/ext/npm/{path}", headers=viewer)
+        assert res.status_code == 200, res.text
+        texts.append(res.text)
+    texts.append((await client.get("/api/v1/apps/suggestions", headers=headers)).text)
+    loaded = get_extension_runtime().loaded["npm"]
+    texts.append((await loaded.instance.health(loaded.ctx)).message or "")
+    return "\n".join(texts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", [
+    f"http://{DUMMY_USER}:{DUMMY_PASSWORD}@npm.test:81/nginx/proxy",
+    f"{DUMMY_USER}:{DUMMY_PASSWORD}@npm.test:81",
+    f"https://{DUMMY_PASSWORD}@npm.test",
+])
+async def test_address_with_credentials_is_refused_when_saving(client, db_session, test_settings, url):
+    headers, fake = await _enable(client, db_session, test_settings)
+    res = await client.put(
+        "/api/v1/extensions/npm/settings",
+        json={"current_password": "correct-horse-battery", "values": {"url": url, "identity": "admin@home.example"}}, headers=headers,
+    )
+    assert res.status_code == 422, res.text
+    assert "Benutzername oder Passwort" in res.json()["detail"]
+    assert DUMMY_PASSWORD not in res.text and DUMMY_USER not in res.text
+    stored = (await client.get("/api/v1/extensions/npm/settings", headers=headers)).json()
+    assert DUMMY_PASSWORD not in json.dumps(stored)
+    assert fake.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["http://npm.test:81/nginx/proxy", "192.0.2.21:81", "https://[2001:db8::21]:81/npm"])
+async def test_normal_addresses_are_still_accepted(client, db_session, test_settings, url):
+    headers, _ = await _enable(client, db_session, test_settings)
+    res = await client.put(
+        "/api/v1/extensions/npm/settings",
+        json={"current_password": "correct-horse-battery", "values": {"url": url, "identity": "admin@home.example"}}, headers=headers,
+    )
+    assert res.status_code == 200, res.text
+
+
+@pytest.mark.asyncio
+async def test_stored_address_with_credentials_never_reaches_readers(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    loaded = get_extension_runtime().loaded["npm"]
+    await loaded.ctx.settings.set({"url": f"http://{DUMMY_USER}:{DUMMY_PASSWORD}@npm.test:81/nginx/proxy", "identity": "admin@home.example"})
+    viewer = await _viewer(client, headers)
+
+    # httpx macht aus `benutzer:passwort@` eine Basic-Anmeldung, die das Token ersetzt; der Nachbau lehnt das ab.
+    summary = (await client.get("/api/v1/ext/npm/summary", headers=viewer)).json()
+    assert summary["state"] == "auth_failed" and summary["url"] == NPM_URL, summary
+    text = await _reader_texts(client, headers, viewer)
+    assert DUMMY_PASSWORD not in text and DUMMY_USER not in text
+
+    # Die Verbindung selbst nutzt die gespeicherte Adresse weiter.
+    assert fake.requests and all(r.url.host == "npm.test" for r in fake.requests)
+
+    checked = fake._npm
+
+    def any_token(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/api/tokens" and fake.npm_tokens:
+            request.headers["Authorization"] = f"Bearer {next(iter(fake.npm_tokens))}"
+        return checked(request)
+
+    fake._npm = any_token
+    summary = (await client.get("/api/v1/ext/npm/summary", headers=viewer)).json()
+    assert summary["state"] == "ok" and summary["url"] == NPM_URL, summary
+    text = await _reader_texts(client, headers, viewer)
+    assert DUMMY_PASSWORD not in text and DUMMY_USER not in text
+
+    fake.down.add("npm.test")
+    summary = (await client.get("/api/v1/ext/npm/summary", headers=viewer)).json()
+    assert summary["state"] == "unreachable" and summary["url"] == NPM_URL, summary
+    text = await _reader_texts(client, headers, viewer)
+    assert DUMMY_PASSWORD not in text and DUMMY_USER not in text
+
+
+@pytest.mark.asyncio
+async def test_summary_uses_one_settings_snapshot_for_client_and_url(client, db_session, test_settings, monkeypatch):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    loaded = get_extension_runtime().loaded["npm"]
+    settings = loaded.ctx.settings
+    old_url = f"http://{DUMMY_USER}:{DUMMY_PASSWORD}@npm.test:81/nginx/proxy"
+    await settings.set({"url": old_url, "identity": "admin@home.example"})
+    original_get = settings.get
+    changed = False
+
+    async def get_and_change() -> dict:
+        nonlocal changed
+        values = await original_get()
+        if not changed:
+            changed = True
+            await settings.set({"url": "http://new-npm.test:81", "identity": "admin@home.example"})
+        return values
+
+    monkeypatch.setattr(settings, "get", get_and_change)
+    summary = (await client.get("/api/v1/ext/npm/summary", headers=headers)).json()
+
+    assert changed and (await original_get())["url"] == "http://new-npm.test:81"
+    assert summary["url"] == NPM_URL
+    assert DUMMY_PASSWORD not in json.dumps(summary) and DUMMY_USER not in json.dumps(summary)
+
+
+@pytest.mark.asyncio
+async def test_unusable_stored_address_is_not_quoted_with_credentials(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    loaded = get_extension_runtime().loaded["npm"]
+    viewer = await _viewer(client, headers)
+    for url in (f"ftp://{DUMMY_USER}:{DUMMY_PASSWORD}@npm.test", f"http://{DUMMY_USER}:{DUMMY_PASSWORD}@"):
+        await loaded.ctx.settings.set({"url": url, "identity": "admin@home.example"})
+        summary = (await client.get("/api/v1/ext/npm/summary", headers=viewer)).json()
+        assert summary["invalid"] is True and "ist ungültig" in summary["message"], summary
+        text = await _reader_texts(client, headers, viewer)
+        assert DUMMY_PASSWORD not in text and DUMMY_USER not in text, url
+    await loaded.ctx.settings.set({"url": "ftp://npm.test", "identity": "admin@home.example"})
+    summary = (await client.get("/api/v1/ext/npm/summary", headers=viewer)).json()
+    assert "„ftp://npm.test“" in summary["message"]
+    assert fake.requests == []
+
+
+@pytest.mark.asyncio
+async def test_parser_error_does_not_expose_stored_npm_address(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    loaded = get_extension_runtime().loaded["npm"]
+    await loaded.ctx.settings.set({
+        "url": "http://[" + DUMMY_USER + ":dummy-zugang]#rest@npm.test",
+        "identity": "admin@home.example",
+    })
+    viewer = await _viewer(client, headers)
+
+    summary = await client.get("/api/v1/ext/npm/summary", headers=viewer)
+    tile = await client.get("/api/v1/ext/npm/widgets/certificates", headers=viewer)
+
+    assert summary.json()["invalid"] is True
+    assert all(part not in summary.text for part in ("deck-leser", "dummy-zugang", "rest", "npm.test"))
+    assert all(part not in tile.text for part in ("deck-leser", "dummy-zugang", "rest", "npm.test"))
+
+
+TRICKY_PASSWORDS = ["teil-eins/teil-zwei", "teil-eins#teil-zwei", "teil-eins?teil-zwei", "teil-eins@teil-zwei"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("password", TRICKY_PASSWORDS)
+async def test_password_with_url_characters_is_refused_when_saving(client, db_session, test_settings, password):
+    headers, fake = await _enable(client, db_session, test_settings)
+    url = f"http://{DUMMY_USER}:{password}@npm.test:81"
+    res = await client.put(
+        "/api/v1/extensions/npm/settings", json={"current_password": "correct-horse-battery", "values": {"url": url, "identity": "admin@home.example"}}, headers=headers,
+    )
+    assert res.status_code == 422, res.text
+    assert "teil-eins" not in res.text and "teil-zwei" not in res.text
+    assert fake.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("password", TRICKY_PASSWORDS)
+async def test_stored_password_with_url_characters_never_reaches_readers(client, db_session, test_settings, password):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    loaded = get_extension_runtime().loaded["npm"]
+    await loaded.ctx.settings.set({"url": f"http://{DUMMY_USER}:{password}@npm.test:81", "identity": "admin@home.example"})
+    viewer = await _viewer(client, headers)
+    text = await _reader_texts(client, headers, viewer)
+    assert "teil-eins" not in text and "teil-zwei" not in text and DUMMY_USER not in text
+
+
+WIDE_AT_SIGNS = [chr(0xFF20), chr(0xFE6B)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("at", WIDE_AT_SIGNS)
+async def test_wide_at_sign_is_refused_when_saving(client, db_session, test_settings, at):
+    headers, fake = await _enable(client, db_session, test_settings)
+    url = f"http://{DUMMY_USER}:teil-eins{at}npm.test:81"
+    res = await client.put(
+        "/api/v1/extensions/npm/settings", json={"current_password": "correct-horse-battery", "values": {"url": url, "identity": "admin@home.example"}}, headers=headers,
+    )
+    assert res.status_code == 422, res.text
+    assert "teil-eins" not in res.text and DUMMY_USER not in res.text
+    assert fake.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("at", WIDE_AT_SIGNS)
+@pytest.mark.parametrize("password", ["teil-eins", "teil-eins/teil-zwei"])
+async def test_stored_wide_at_sign_never_reaches_readers(client, db_session, test_settings, at, password):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    loaded = get_extension_runtime().loaded["npm"]
+    await loaded.ctx.settings.set({"url": f"http://{DUMMY_USER}:{password}{at}npm.test:81", "identity": "admin@home.example"})
+    viewer = await _viewer(client, headers)
+    text = await _reader_texts(client, headers, viewer)
+    assert "teil-eins" not in text and "teil-zwei" not in text and DUMMY_USER not in text

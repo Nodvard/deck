@@ -13,6 +13,7 @@ from .config import (
     NotConfigured,
     PiholeConfig,
     pihole_config,
+    shown_url,
 )
 
 if TYPE_CHECKING:
@@ -34,8 +35,9 @@ class PiholeService:
         async with self._ctx.vault_use(handle) as value:
             return value
 
-    async def client(self) -> PiholeClient:
-        settings = await self._ctx.settings.get()
+    async def client(self, settings: dict[str, Any] | None = None) -> PiholeClient:
+        if settings is None:
+            settings = await self._ctx.settings.get()
         async with self._lock:
             try:
                 config = pihole_config(settings)
@@ -82,15 +84,17 @@ class PiholeService:
 
     async def status(self) -> dict[str, Any]:
         """Für Seite und Kachel: `state`, `message`, `url`, `summary`, `blocking`, `top_clients`."""
+        settings = await self._ctx.settings.get()
         try:
-            client = await self.client()
+            client = await self.client(settings)
         except NotConfigured as exc:
             return {
                 "state": "not_configured", "message": str(exc), "invalid": isinstance(exc, InvalidSetting), "url": None,
                 "summary": None, "blocking": None, "top_clients": None,
             }
+        url = shown_url(settings.get("url"), client.base_url)
         result: dict[str, Any] = {
-            "state": "ok", "message": None, "url": client.base_url, "summary": None, "blocking": None, "top_clients": None,
+            "state": "ok", "message": None, "url": url, "summary": None, "blocking": None, "top_clients": None,
         }
         try:
             result["summary"] = await client.summary()

@@ -187,7 +187,9 @@ There are two ways:
 
 - **In the interface:** Settings → System → Trusted proxy. One address or small network per line, then "Save". The
   change applies immediately, without a restart. It is recorded in the audit log with the old and new value. You see
-  the card with the permissions for settings and system (role "admin" or the owner).
+  the card with the permissions for settings and system (role "admin" or the owner). Only the owner can change and
+  save the list; other administrators can only view it (`PUT /settings/system.trusted_proxies` returns `403`). This is
+  a guardrail, not a hard boundary: anyone who can run commands on the Deck host can also change the Compose file.
 - **Through the environment variable** `NODVARD_DECK_TRUSTED_PROXIES` in your Compose file, several entries separated by
   commas, e.g. `NODVARD_DECK_TRUSTED_PROXIES: "172.18.0.5, fd00:1::5"`. When it is set, only it applies. The card then
   only shows the list; you change it in the Compose file (then `docker compose up -d`). Invalid entries are skipped and

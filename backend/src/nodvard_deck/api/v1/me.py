@@ -263,9 +263,11 @@ async def totp_setup(
 
 @router.post("/totp/confirm", responses=error_responses(400, 401, 403, 409, 429, 503, 507))
 async def totp_confirm(
-    payload: TotpConfirmRequest, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep
+    payload: TotpConfirmRequest, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep,
+    current_session_id: CurrentSessionId,
 ) -> RecoveryCodesOut:
-    """Schaltet die Zwei-Faktor-Anmeldung scharf und liefert dabei einmalig die ersten zehn Wiederherstellungs-Codes."""
+    """Schaltet die Zwei-Faktor-Anmeldung scharf und liefert dabei einmalig die ersten zehn Wiederherstellungs-Codes;
+    andere Anmeldungen werden abgemeldet, die aktuelle bleibt."""
     try:
         codes = await auth_service.confirm_totp_setup(
             session, settings, user, code=payload.code, ip=_client_ip(request),
@@ -277,9 +279,12 @@ async def totp_confirm(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except auth_service.AuthError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    # Sonst liefe eine schon gestohlene Anmeldung ohne zweiten Faktor weiter.
+    revoked = await auth_service.revoke_refresh_tokens(session, user.id, except_token_id=current_session_id)
     await audit_service.log(
         session, actor_type="user", actor_id=user.id, action="auth.recovery_codes_generated",
-        outcome="success", target_type="user", target_id=user.id, detail={"reason": "2fa_enabled"},
+        outcome="success", target_type="user", target_id=user.id,
+        detail={"reason": "2fa_enabled", "signed_out_sessions": revoked},
     )
     return RecoveryCodesOut(recovery_codes=codes)
 

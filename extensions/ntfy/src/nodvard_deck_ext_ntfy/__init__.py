@@ -124,14 +124,22 @@ def topic_error(status_code: int) -> str | None:
     return None
 
 
-# ntfy beantwortet die Frage nach dem Thema mit dem Leserecht; ein Token, das nur schreiben darf, bekommt 401 oder 403.
 WRITE_ONLY_NOTE = (
-    "Der ntfy-Server ist erreichbar und das Thema wird angenommen. Ob Senden erlaubt ist, lässt sich ohne echte "
-    "Nachricht nicht prüfen: Das zeigt „Testnachricht senden“."
+    "Der ntfy-Server ist erreichbar und erlaubt das Senden an dieses Thema. "
+    "Mit „Testnachricht senden“ prüfst du die Zustellung."
 )
 TOKEN_REJECTED_TEXT = (
     "ntfy hat das Zugriffstoken abgelehnt (HTTP 401). Prüfe das Token in den Einstellungen, es ist falsch oder abgelaufen."
 )
+NOT_NTFY_TEXT = "Unter dieser Adresse antwortet kein ntfy-Server mit gültiger JSON-Kennung. Prüfe die Adresse in den Einstellungen."
+
+
+def json_object(response: Any) -> dict:
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 def _url_is_valid(url: str) -> bool:
@@ -481,27 +489,45 @@ class _NtfyChannel:
             problem = status_error(response.status_code)
             if problem:
                 return ConnectorHealth(ok=False, message=problem), ""
-            # `/v1/health` antwortet auch ohne Recht am Thema; erst diese Frage zeigt, ob ntfy das Thema kennt.
+            healthy = json_object(response).get("healthy")
+            if not isinstance(healthy, bool):
+                return ConnectorHealth(ok=False, message=NOT_NTFY_TEXT), "verbatim"
+            if not healthy:
+                return ConnectorHealth(ok=False, message="Der ntfy-Server meldet sich als nicht gesund. Versuche es später erneut."), "verbatim"
             response = await self._request("GET", f"{server_url}/{topic}/auth", headers=headers)
-            if response.status_code in (401, 403):
-                return await self._after_refusal(server_url, headers)
+            read_refused = response.status_code in (401, 403)
+            if not read_refused:
+                problem = topic_error(response.status_code)
+                if problem:
+                    return ConnectorHealth(ok=False, message=problem), "verbatim"
+                problem = status_error(response.status_code)
+                if problem:
+                    return ConnectorHealth(ok=False, message=problem), ""
+                if json_object(response).get("success") is not True:
+                    return ConnectorHealth(ok=False, message=NOT_NTFY_TEXT), "verbatim"
+            result, kind = await self._check_write(server_url, topic, headers)
+            if result.ok and read_refused:
+                return ConnectorHealth(ok=True, message=WRITE_ONLY_NOTE), "note"
+            return result, kind
         except Exception as exc:  # noqa: BLE001 - Health-Check darf nie werfen, nur melden
             return ConnectorHealth(ok=False, message=str(exc)), ""
-        problem = topic_error(response.status_code)
-        if problem:
-            return ConnectorHealth(ok=False, message=problem), "verbatim"
-        problem = status_error(response.status_code)
-        if problem:
-            return ConnectorHealth(ok=False, message=problem), ""
-        return ConnectorHealth(ok=True, message=f"HTTP {response.status_code}"), ""
 
-    async def _after_refusal(self, server_url: str, headers: dict[str, str]) -> tuple[ConnectorHealth, str]:
-        """Das Thema verweigert das Lesen: Ein falsches Token zeigt das Konto, ein reines Schreibrecht ist normal."""
-        if "Authorization" in headers:
-            account = await self._request("GET", server_url + "/v1/account", headers=headers)
-            if account.status_code == 401:
+    async def _check_write(self, server_url: str, topic: str, headers: dict[str, str]) -> tuple[ConnectorHealth, str]:
+        # ntfy prüft das Schreibrecht vor der Priorität. „invalid“ verhindert die Zustellung.
+        response = await self._request("POST", f"{server_url}/{topic}", headers={**headers, "Priority": "invalid"}, content=b"")
+        if response.status_code in (401, 403):
+            if response.status_code == 401 and "Authorization" in headers:
                 return ConnectorHealth(ok=False, message=TOKEN_REJECTED_TEXT), "verbatim"
-        return ConnectorHealth(ok=True, message=WRITE_ONLY_NOTE), "note"
+            who = "Dem Zugriffstoken" if "Authorization" in headers else "Ohne Zugriffstoken"
+            return ConnectorHealth(
+                ok=False,
+                message=f"{who} fehlt das Schreibrecht für dieses Thema (HTTP {response.status_code}). Hinterlege ein gültiges Zugriffstoken mit Schreibrecht in den Einstellungen.",
+            ), "verbatim"
+        body = json_object(response)
+        if response.status_code == 400 and body.get("code") == 40007 and body.get("http") == 400:
+            return ConnectorHealth(ok=True, message="Schreibrecht bestätigt."), ""
+        problem = status_error(response.status_code)
+        return ConnectorHealth(ok=False, message=problem or "Der ntfy-Server hat das Schreibrecht nicht bestätigt."), "verbatim"
 
 
 class _TokenIn(BaseModel):

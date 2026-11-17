@@ -45,13 +45,13 @@ from .watch import InventoryCache, run_backup_watch
 
 _LAST_STATUS_LABEL = {
     "ok": "erfolgreich", "failed": "fehlgeschlagen", "running": "läuft", "unknown": "unbekannt",
-    "unprotected": "kein Backup-Job", "unreachable": "nicht erreichbar",
+    "job_error": "Job mit Fehlern, Gast unklar", "unprotected": "kein Backup-Job", "unreachable": "nicht erreichbar",
 }
 """Anzeigetext für `last_status` im Widget; die Seite hat dieselbe Zuordnung in BackupsPage.tsx."""
 
 _LAST_STATUS_TONE = {
     "ok": "good", "failed": "danger", "running": "good", "unknown": "neutral", "unprotected": "warn",
-    "unreachable": "danger",
+    "job_error": "warn", "unreachable": "danger",
 }
 """Die Farbe hängt am Maschinenwert und wird im Backend entschieden (Badge-Regel, docs/02)."""
 

@@ -35,7 +35,7 @@ from restore_helpers import REPO_ROOT
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-SETUP_CODE = "E2E-CODE-2345"
+SETUP_CODE = "E2E-CODE-2345-6789"
 OWNER_PW = "ein-sehr-langes-konto-passwort"
 BACKUP_PW = "einmal-passwort-fuer-diese-datei"
 SECRET_VALUE = "super-geheimer-api-schluessel-4711"

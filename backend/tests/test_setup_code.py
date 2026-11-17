@@ -14,6 +14,7 @@ import pytest
 from nodvard_deck.config import Settings
 from nodvard_deck.core import login_limit, setup_code
 from nodvard_deck.models import AuditEntry, User
+from nodvard_deck.services import auth as auth_service
 from sqlalchemy import select
 
 URL = "/api/v1/auth/bootstrap"
@@ -71,7 +72,7 @@ def test_too_short_preset_is_ignored(tmp_path):
 
 @pytest.mark.parametrize(
     ("preset", "expected"),
-    [(None, None), ("", None), ("abc-defg--", None), ("ÄÖÜ-äöü-ß!", None), ("abcd-1234", "ABCD1234")],
+    [(None, None), ("", None), ("abc-defg--", None), ("ÄÖÜ-äöü-ß!", None), ("abcd-1234", None), ("abcd-1234-efgh", "ABCD1234EFGH")],
 )
 def test_minimum_preset_length_counts_only_ascii_letters_and_digits(preset, expected):
     assert setup_code.valid_preset(preset) == expected
@@ -251,7 +252,7 @@ async def test_startup_rejects_short_preset_and_accepts_generated_code(client, d
     test_settings.setup_code = preset
     code = await auth_service.prepare_setup_code(db_session, test_settings)
     out = capsys.readouterr().out
-    assert "NODVARD_DECK_SETUP_CODE ist zu kurz (mindestens 8 Buchstaben oder Ziffern) und wird ignoriert." in out
+    assert "NODVARD_DECK_SETUP_CODE ist zu kurz (mindestens 12 Buchstaben oder Ziffern) und wird ignoriert." in out
     assert preset not in out
     assert f"Einrichtungscode: {code}" in out
     assert _file(test_settings).exists()
@@ -277,3 +278,152 @@ def test_banner_keeps_the_text_that_docs_and_grep_rely_on():
     text = setup_code.banner("K7MQ-X2VD-H9PA")
     assert "Einrichtungscode: K7MQ-X2VD-H9PA (im Browser eingeben)" in text
     assert text.startswith("\n") and text.endswith("\n")
+
+
+# --- Grenze über alle Adressen ------------------------------------------------
+
+
+def _address(i: int) -> str:
+    return f"198.51.{i // 250}.{i % 250 + 1}"
+
+
+async def _guess(session, settings, i: int, code: str = "AAAA-AAAA-AAAA") -> None:
+    await auth_service.verify_setup_code(session, settings, code=code, ip=_address(i))
+
+
+@pytest.fixture
+def frozen_clock(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(login_limit, "_now", lambda: now[0])
+    return now
+
+
+@pytest.mark.asyncio
+async def test_wrong_codes_from_many_addresses_hit_one_limit(db_session, real_code_settings, frozen_clock):
+    code, _ = setup_code.ensure(real_code_settings.data_dir)
+    for i in range(login_limit.MAX_SETUP_FAILURES):
+        with pytest.raises(auth_service.InvalidSetupCode):
+            await _guess(db_session, real_code_settings, i)
+    with pytest.raises(auth_service.TooManyAttempts) as blocked:
+        await _guess(db_session, real_code_settings, 5000, code)
+    assert 0 < blocked.value.retry_after <= login_limit.SETUP_WINDOW_SECONDS
+    (locked,) = (await db_session.execute(select(AuditEntry).where(AuditEntry.action == "login.locked"))).scalars()
+    assert locked.detail["scopes"] == [login_limit.SCOPE_SETUP]
+    assert locked.detail["window_seconds"] == login_limit.SETUP_WINDOW_SECONDS
+    assert str(login_limit.MAX_SETUP_FAILURES) in locked.reason
+
+
+@pytest.mark.asyncio
+async def test_limit_over_all_addresses_answers_429(client, db_session, real_code_settings, frozen_clock):
+    code, _ = setup_code.ensure(real_code_settings.data_dir)
+    for i in range(login_limit.MAX_SETUP_FAILURES):
+        with pytest.raises(auth_service.InvalidSetupCode):
+            await _guess(db_session, real_code_settings, i)
+    r = await client.post(URL, json={**BODY, "setup_code": code})
+    assert r.status_code == 429
+    assert "Retry-After" in r.headers
+    assert (await db_session.execute(select(User))).first() is None
+
+
+@pytest.mark.asyncio
+async def test_right_code_below_the_limit_passes_and_does_not_count(db_session, real_code_settings, frozen_clock):
+    code, _ = setup_code.ensure(real_code_settings.data_dir)
+    for i in range(login_limit.MAX_SETUP_FAILURES - 1):
+        with pytest.raises(auth_service.InvalidSetupCode):
+            await _guess(db_session, real_code_settings, i)
+    await _guess(db_session, real_code_settings, 5000, code)
+    with pytest.raises(auth_service.InvalidSetupCode):
+        await _guess(db_session, real_code_settings, 5001)
+    with pytest.raises(auth_service.TooManyAttempts):
+        await _guess(db_session, real_code_settings, 5002, code)
+
+
+@pytest.mark.asyncio
+async def test_limit_over_all_addresses_ends_with_its_window(db_session, real_code_settings, frozen_clock):
+    code, _ = setup_code.ensure(real_code_settings.data_dir)
+    for i in range(login_limit.MAX_SETUP_FAILURES):
+        with pytest.raises(auth_service.InvalidSetupCode):
+            await _guess(db_session, real_code_settings, i)
+    frozen_clock[0] += login_limit.SETUP_WINDOW_SECONDS - 1
+    with pytest.raises(auth_service.TooManyAttempts):
+        await _guess(db_session, real_code_settings, 5000, code)
+    frozen_clock[0] += 1
+    await _guess(db_session, real_code_settings, 5001, code)
+
+
+@pytest.mark.asyncio
+async def test_limit_per_address_stays_as_before(db_session, real_code_settings, frozen_clock):
+    setup_code.ensure(real_code_settings.data_dir)
+    for _ in range(login_limit.MAX_FAILURES_PER_USER):
+        with pytest.raises(auth_service.InvalidSetupCode):
+            await _guess(db_session, real_code_settings, 7)
+    with pytest.raises(auth_service.TooManyAttempts) as blocked:
+        await _guess(db_session, real_code_settings, 7)
+    assert blocked.value.retry_after <= login_limit.WINDOW_SECONDS
+    with pytest.raises(auth_service.InvalidSetupCode):
+        await _guess(db_session, real_code_settings, 8)
+
+
+def test_login_does_not_count_for_the_setup_limit(frozen_clock):
+    for i in range(login_limit.MAX_SETUP_FAILURES):
+        login_limit.failed(login_limit.begin(_address(i), "nico"))
+    attempt = login_limit.begin(_address(5000), auth_service.SETUP_ATTEMPT_KEY, setup=True)
+    assert attempt.setup
+
+
+def test_setup_limit_does_not_touch_login(frozen_clock):
+    for i in range(login_limit.MAX_SETUP_FAILURES):
+        login_limit.failed(login_limit.begin(_address(i), auth_service.SETUP_ATTEMPT_KEY, setup=True))
+    with pytest.raises(login_limit.Locked):
+        login_limit.begin(_address(5000), auth_service.SETUP_ATTEMPT_KEY, setup=True)
+    login_limit.begin(_address(5000), "nico")
+
+
+def test_lock_of_the_setup_limit_is_announced_once(frozen_clock):
+    started = [
+        login_limit.failed(login_limit.begin(_address(i), auth_service.SETUP_ATTEMPT_KEY, setup=True))
+        for i in range(login_limit.MAX_SETUP_FAILURES)
+    ]
+    assert started[-1] == [login_limit.SCOPE_SETUP]
+    assert all(s == [] for s in started[:-1])
+
+
+def test_released_setup_attempt_does_not_count(frozen_clock):
+    for i in range(login_limit.MAX_SETUP_FAILURES):
+        login_limit.release(login_limit.begin(_address(i), auth_service.SETUP_ATTEMPT_KEY, setup=True))
+    login_limit.begin(_address(5000), auth_service.SETUP_ATTEMPT_KEY, setup=True)
+
+
+@pytest.mark.asyncio
+async def test_429_names_the_wait_and_the_restart(client, db_session, real_code_settings, frozen_clock):
+    code, _ = setup_code.ensure(real_code_settings.data_dir)
+    for i in range(login_limit.MAX_SETUP_FAILURES):
+        with pytest.raises(auth_service.InvalidSetupCode):
+            await _guess(db_session, real_code_settings, i)
+    r = await client.post(URL, json={**BODY, "setup_code": code})
+    assert r.status_code == 429
+    detail = r.json()["detail"]
+    assert "Bitte in 60 Minuten erneut versuchen." in detail
+    assert "Container neu starten" in detail
+    assert "Einrichtungscode steht dann wieder im Protokoll" in detail
+
+
+@pytest.mark.asyncio
+async def test_restart_hint_also_for_the_limit_per_address(db_session, real_code_settings, frozen_clock):
+    setup_code.ensure(real_code_settings.data_dir)
+    for _ in range(login_limit.MAX_FAILURES_PER_USER):
+        with pytest.raises(auth_service.InvalidSetupCode):
+            await _guess(db_session, real_code_settings, 7)
+    with pytest.raises(auth_service.TooManyAttempts) as blocked:
+        await _guess(db_session, real_code_settings, 7)
+    assert str(blocked.value).startswith("Zu viele Fehlversuche. Bitte in ")
+    assert auth_service.SETUP_RESTART_HINT in str(blocked.value)
+    assert blocked.value.retry_after <= login_limit.WINDOW_SECONDS
+
+
+def test_restart_hint_is_not_added_to_the_login():
+    for i in range(login_limit.MAX_FAILURES_PER_USER):
+        login_limit.failed(login_limit.begin("198.51.100.9", "nico"))
+    with pytest.raises(auth_service.TooManyAttempts) as blocked:
+        auth_service._begin_attempt("198.51.100.9", "nico")
+    assert "Container" not in str(blocked.value)

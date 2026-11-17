@@ -4,6 +4,8 @@
     "url": {
       "type": "string",
       "title": "Adresse der Verwaltung",
+      "pattern": "^[^@\\uFF20\\uFE6B]*$",
+      "x-pattern-message": "Benutzername oder Passwort gehören nicht in die Adresse. Bitte nur die Adresse eintragen, das Passwort kommt in das Feld darunter.",
       "description": "Die Adresse der Verwaltungsoberfläche, meist Port 81, z. B. http://192.168.2.21:81. Eine aus dem Browser kopierte Seite wie /nginx/proxy schneidet Nodvard Deck ab."
     },
     "identity": {

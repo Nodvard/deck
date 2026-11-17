@@ -557,8 +557,52 @@ def _bind_source(volume: Any) -> Any:
     return None
 
 
+MAX_COMPOSE_ALIASES = 200
+MAX_COMPOSE_NODES = 200_000
+
+
+class ComposeTooComplex(yaml.YAMLError):
+    """Zu viele oder zu stark verschachtelte Aliase und Merge-Schlüssel."""
+
+
+def _check_expansion(text: str) -> None:
+    """Zählt Aliase und die Knoten nach dem Auflösen, ohne etwas aufzubauen (Schutz vor verschachtelten Aliasen)."""
+    aliases = 0
+    anchors: dict[str, int] = {}
+    stack: list[list[Any]] = []
+    for event in yaml.parse(text, Loader=_ComposeLoader):
+        weight = 0
+        if isinstance(event, yaml.AliasEvent):
+            aliases += 1
+            if aliases > MAX_COMPOSE_ALIASES:
+                raise ComposeTooComplex("zu viele Aliase")
+            if any(entry[0] == event.anchor for entry in stack):
+                raise ComposeTooComplex("Verweis auf einen noch offenen Anker")
+            weight = anchors.get(event.anchor, 1)
+        elif isinstance(event, yaml.ScalarEvent):
+            weight = 1
+            if event.anchor:
+                anchors[event.anchor] = 1
+        elif isinstance(event, (yaml.SequenceStartEvent, yaml.MappingStartEvent)):
+            stack.append([event.anchor, 1])
+            continue
+        elif isinstance(event, (yaml.SequenceEndEvent, yaml.MappingEndEvent)):
+            anchor, weight = stack.pop()
+            if anchor:
+                anchors[anchor] = weight
+        else:
+            continue
+        if weight > MAX_COMPOSE_NODES:
+            raise ComposeTooComplex("zu groß nach dem Auflösen der Aliase")
+        if stack:
+            stack[-1][1] += weight
+            if stack[-1][1] > MAX_COMPOSE_NODES:
+                raise ComposeTooComplex("zu groß nach dem Auflösen der Aliase")
+
+
 def load_compose(text: bytes) -> Any:
     """Die Compose-Datei als Daten; Markierungen wie `!reset` werden gelesen, nie ausgeführt."""
+    _check_expansion(text.decode("utf-8"))
     # _ComposeLoader erbt von SafeLoader und baut nur Daten, keine Objekte.
     return yaml.load(text.decode("utf-8"), Loader=_ComposeLoader)  # nosec B506 - Grund: _ComposeLoader erbt von yaml.SafeLoader, baut nur Daten
 
@@ -601,6 +645,8 @@ def compose_warnings(text: bytes) -> tuple[list[str], str | None]:
     der Grund, wenn sie sich nicht lesen lässt."""
     try:
         config = load_compose(text)
+    except ComposeTooComplex:
+        return [], "Die Compose-Datei verwendet zu viele verschachtelte Anker und Verweise."
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
         return [], f"Die Compose-Datei ist kein gültiges YAML: {_shown(str(exc), 200)}"
     except RecursionError:

@@ -63,6 +63,14 @@ class _HangingServices:
         await asyncio.sleep(3600)
 
 
+class _ServicesWithUnhealthy:
+    async def list_services(self):
+        return [
+            {"id": "h1:web", "name": "web", "state": "running", "tone": "good"},
+            {"id": "h1:db", "name": "db", "state": "running", "tone": "warn"},
+        ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("live", [False, True])
 async def test_unreachable_hosts_are_reported_not_counted_as_stopped(client, live):
@@ -83,6 +91,16 @@ async def test_overview_without_dead_hosts_has_empty_unreachable_list(client):
     body = (await client.get("/api/v1/overview", headers=_auth_header(token))).json()
     assert body["services_unreachable_hosts"] == []
     assert not any(s["unreachable"] for s in body["services"])
+
+
+@pytest.mark.asyncio
+async def test_unhealthy_service_is_not_counted_as_running(client):
+    token = await _bootstrap_owner(client)
+    get_extension_runtime().capabilities.provide("fake-services", ServiceCatalog, _ServicesWithUnhealthy())
+
+    body = (await client.get("/api/v1/overview", headers=_auth_header(token))).json()
+    assert len(body["services"]) == 2
+    assert body["services_running"] == 1
 
 
 class _ServicesWithBadUrls:

@@ -26,15 +26,18 @@ from nodvard_deck.ext.runtime import ExtensionRuntime, LoadedExtension
 
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
 
-# Antwort von ntfy 2.38 auf `GET /<thema>/auth` und auf das Senden ohne Recht am Thema.
 WRITE_ONLY_NOTE = (
-    "Der ntfy-Server ist erreichbar und das Thema wird angenommen. Ob Senden erlaubt ist, lässt sich ohne echte "
-    "Nachricht nicht prüfen: Das zeigt „Testnachricht senden“."
+    "Der ntfy-Server ist erreichbar und erlaubt das Senden an dieses Thema. "
+    "Mit „Testnachricht senden“ prüfst du die Zustellung."
 )
 TOKEN_REJECTED_TEXT = (
     "ntfy hat das Zugriffstoken abgelehnt (HTTP 401). Prüfe das Token in den Einstellungen, es ist falsch oder abgelaufen."
 )
 NO_ACCESS = {"code": 40301, "http": 403, "error": "forbidden", "link": "https://ntfy.sh/docs/publish/#authentication"}
+INVALID_PRIORITY = {
+    "code": 40007, "http": 400, "error": "invalid priority parameter",
+    "link": "https://ntfy.sh/docs/publish/#message-priority",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -93,6 +96,8 @@ async def fake_ntfy_server():
 
     @app.post("/")
     async def publish(request: Request, authorization: str | None = Header(default=None)):
+        if healthy.get("write", 200) != 200:
+            return JSONResponse(NO_ACCESS, status_code=healthy["write"])
         body = await request.json()
         received.append({"body": body, "authorization": authorization, "priority": request.headers.get("Priority")})
         return {"id": "fake-id"}
@@ -112,6 +117,17 @@ async def fake_ntfy_server():
         if healthy.get("account", 200) == 200:
             return {"username": "deck", "role": "user"}
         return JSONResponse({"code": 40101, "http": 401, "error": "unauthorized"}, status_code=401)
+
+    @app.post("/{topic}")
+    async def write_probe(topic: str, request: Request):
+        healthy.setdefault("probes", []).append({"topic": topic, "headers": dict(request.headers)})
+        if healthy.get("account", 200) == 401:
+            return JSONResponse({"code": 40101, "http": 401, "error": "unauthorized"}, status_code=401)
+        if healthy.get("write", 200) != 200:
+            return JSONResponse(NO_ACCESS, status_code=healthy["write"])
+        assert request.headers["Priority"] == "invalid"
+        assert await request.body() == b""
+        return JSONResponse(INVALID_PRIORITY, status_code=400)
 
     async with serve_app(app) as server_url:
         yield server_url, received, healthy
@@ -189,8 +205,13 @@ async def test_connection_test_reads_the_current_token(fake_ntfy_server, db_sess
 
     def answer(request):
         seen.append(request.headers.get("authorization"))
+        if seen[-1] != expected:
+            return httpx.Response(401)
+        if request.method == "POST":
+            assert request.url.path == "/test-topic" and request.headers["Priority"] == "invalid"
+            return httpx.Response(400, json=INVALID_PRIORITY)
         assert request.method == "GET" and request.url.path in ("/v1/health", "/test-topic/auth")
-        return httpx.Response(200 if seen[-1] == expected else 401)
+        return httpx.Response(200, json={"healthy": True} if request.url.path == "/v1/health" else {"success": True})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
         monkeypatch.setattr(ctx.http, "_client", http)
@@ -203,7 +224,7 @@ async def test_connection_test_reads_the_current_token(fake_ntfy_server, db_sess
         assert (await channel.test()).ok is True
         await ctx.secrets.delete("ntfy-token")
         assert (await channel.test()).ok is False
-    assert seen == ["Bearer erstes-token"] * 2 + ["Bearer falsch"] + ["Bearer zweites-token"] * 2 + [None]
+    assert seen == ["Bearer erstes-token"] * 3 + ["Bearer falsch"] + ["Bearer zweites-token"] * 3 + [None]
 
 
 @pytest.mark.asyncio
@@ -231,8 +252,8 @@ async def test_test_reports_health_from_the_real_server(fake_ntfy_server, db_ses
     assert ok.ok is True
 
     healthy["value"] = False
-    still_ok_http = await channel.test()
-    assert still_ok_http.ok is True  # HTTP 200 bleibt 200, auch wenn der Body "unhealthy" sagt (kein 5xx)
+    unhealthy = await channel.test()
+    assert unhealthy.ok is False and "nicht gesund" in unhealthy.message
 
 
 async def _bootstrap_owner(client, username="owner1", password="correct-horse-battery"):
@@ -308,6 +329,13 @@ async def scripted_ntfy_server():
     @app.api_route("/{path:path}", methods=["GET", "POST"])
     async def anything(path: str, request: Request):
         script["calls"].append(f"{request.method} /{path}")
+        if script["status"] == 200:
+            if path == "v1/health":
+                return JSONResponse(script.get("health_body", {"healthy": True}))
+            if path.endswith("/auth"):
+                return JSONResponse(script.get("auth_body", {"success": True}))
+            if request.method == "POST" and path:
+                return JSONResponse(script.get("probe_body", INVALID_PRIORITY), status_code=script.get("probe_status", 400))
         return Response(content=b'{"error":"geheim-text-vom-server"}', status_code=script["status"], headers=script["headers"], media_type="application/json")
 
     async with serve_app(app) as server_url:
@@ -453,6 +481,93 @@ async def test_test_asks_for_the_topic_after_the_server(scripted_ntfy_server, db
     script.update(status=200)
     channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
     assert (await channel.test()).ok is True
+    assert script["calls"] == ["GET /v1/health", "GET /test-topic/auth", "POST /test-topic"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{}, {"ok": True}, {"healthy": "true"}, {"healthy": 1}, [], None, "<html>Uptime Kuma</html>"])
+async def test_test_rejects_a_foreign_server_returning_200(
+    scripted_ntfy_server, db_session, tmp_path, test_settings, body
+):
+    server_url, script = scripted_ntfy_server
+    script["health_body"] = body
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+
+    result = await channel.test()
+
+    assert result.ok is False and "kein ntfy-Server" in result.message
+    assert script["calls"] == ["GET /v1/health"]
+
+
+@pytest.mark.asyncio
+async def test_test_rejects_html_instead_of_ntfy_json(db_session, tmp_path, test_settings, monkeypatch):
+    import httpx
+
+    channel, ctx = await _channel(db_session, tmp_path, test_settings, "http://fremder-server")
+    calls = []
+
+    def answer(request):
+        calls.append(request.method)
+        return httpx.Response(200, text="<html>Uptime Kuma</html>", headers={"Content-Type": "text/html"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        monkeypatch.setattr(ctx.http, "_client", http)
+        result = await channel.test()
+
+    assert result.ok is False and "kein ntfy-Server" in result.message
+    assert calls == ["GET"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("with_token", "read_status"), [(False, 403), (False, 200), (True, 200)])
+async def test_test_rejects_missing_write_access(
+    fake_ntfy_server, db_session, tmp_path, test_settings, with_token, read_status
+):
+    server_url, received, answers = fake_ntfy_server
+    answers.update(auth=read_status, write=403)
+    channel, ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+    if with_token:
+        await ctx.secrets.create(label="ntfy-token", kind="generic", value="nur-lesen")
+
+    result = await channel.test()
+
+    assert result.ok is False and "Schreibrecht" in result.message and "HTTP 403" in result.message
+    assert ("Dem Zugriffstoken" if with_token else "Ohne Zugriffstoken") in result.message
+    assert "nur-lesen" not in result.message and server_url not in result.message
+    assert len(answers["probes"]) == 1 and received == []
+    with pytest.raises(RuntimeError, match="HTTP 403"):
+        await channel.send(_note())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "body"),
+    [(200, {"id": "fremd"}), (400, {}), (400, {"code": 40007}), (400, []),
+     (400, {"code": 40009, "http": 400}), (503, {"error": "geheim"})],
+)
+async def test_test_requires_the_ntfy_priority_error_to_confirm_write_access(
+    scripted_ntfy_server, db_session, tmp_path, test_settings, code, body
+):
+    server_url, script = scripted_ntfy_server
+    script.update(probe_status=code, probe_body=body)
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+
+    result = await channel.test()
+
+    assert result.ok is False
+    assert "geheim" not in result.message and server_url not in result.message
+    assert script["calls"][-1] == "POST /test-topic"
+
+
+@pytest.mark.asyncio
+async def test_test_rejects_an_unrecognized_topic_response(scripted_ntfy_server, db_session, tmp_path, test_settings):
+    server_url, script = scripted_ntfy_server
+    script["auth_body"] = {"ok": True}
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+
+    result = await channel.test()
+
+    assert result.ok is False and "kein ntfy-Server" in result.message
     assert script["calls"] == ["GET /v1/health", "GET /test-topic/auth"]
 
 
@@ -475,15 +590,16 @@ async def test_test_stays_green_when_only_reading_is_refused(
 
     assert result.ok is True
     assert result.message == WRITE_ONLY_NOTE and "Testnachricht senden" in result.message
-    assert received == []
+    assert received == [] and len(answers["probes"]) == 1
+    assert answers["probes"][0]["headers"].get("authorization") == ("Bearer nur-schreiben" if with_token else None)
 
 
 @pytest.mark.asyncio
 async def test_test_is_green_with_read_access(fake_ntfy_server, db_session, tmp_path, test_settings):
-    server_url, received, _answers = fake_ntfy_server
+    server_url, received, answers = fake_ntfy_server
     channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
     assert (await channel.test()).ok is True
-    assert received == []
+    assert received == [] and len(answers["probes"]) == 1
 
 
 @pytest.mark.asyncio
@@ -544,7 +660,7 @@ async def test_test_accepts_every_valid_topic_name(scripted_ntfy_server, db_sess
     from nodvard_sdk.capabilities import NotificationChannel
 
     assert (await _runtime.capabilities.query(NotificationChannel)[0].test()).ok is True
-    assert script["calls"][-1] == f"GET /{topic}/auth"
+    assert script["calls"] == ["GET /v1/health", f"GET /{topic}/auth", f"POST /{topic}"]
 
 
 @pytest.mark.asyncio
@@ -572,6 +688,17 @@ async def test_connection_test_of_the_settings_page_shows_the_topic_result_uncha
     answers["auth"] = 200
     outcome = await run_connection_test(loaded, settings=await ctx.settings.get(), schema=None, secrets=[], channel=channel)
     assert outcome.ok is True and outcome.message == "Verbindung funktioniert."
+
+    answers.update(auth=403, write=403)
+    outcome = await run_connection_test(loaded, settings=await ctx.settings.get(), schema=None, secrets=[], channel=channel)
+    assert outcome.ok is False and outcome.message == outcome.details[0].message
+    assert outcome.message.startswith("Ohne Zugriffstoken fehlt das Schreibrecht")
+
+    await ctx.secrets.create(label="ntfy-token", kind="generic", value="nur-lesen")
+    answers["auth"] = 200
+    outcome = await run_connection_test(loaded, settings=await ctx.settings.get(), schema=None, secrets=[], channel=channel)
+    assert outcome.ok is False and outcome.message == outcome.details[0].message
+    assert outcome.message.startswith("Dem Zugriffstoken fehlt das Schreibrecht")
 
 
 @pytest.mark.asyncio

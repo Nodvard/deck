@@ -247,6 +247,8 @@ class LoadedExtension:
 class ExtensionRuntime:
     def __init__(self) -> None:
         self.loaded: dict[str, LoadedExtension] = {}
+        self.locks: dict[str, asyncio.Lock] = {}
+        """Kennung -> Sperre um Einschalten und Ausschalten, damit nie zwei Läufe dieselbe Erweiterung laden."""
         self.ui = UiRegistry()
         self.capabilities = CapabilityRegistry()
         self.actions = ActionRegistry()
@@ -264,6 +266,12 @@ class ExtensionRuntime:
         """(Kennung, frühere Kennung) -> Fund der Erweiterung, deren Übernahme erst ein Admin erlauben muss."""
         self.takeovers_allowed: dict[tuple[str, str], Any] = {}
         """Wie `awaiting_consent`, aber schon erlaubt; gilt ab dem nächsten Start."""
+
+    def lock_for(self, ext_id: str) -> asyncio.Lock:
+        # Unbekannte Kennungen bekommen keine bleibende Sperre, sonst wüchse das Wörterbuch mit jeder Anfrage.
+        if ext_id not in self.discovered and ext_id not in self.loaded:
+            return asyncio.Lock()
+        return self.locks.setdefault(ext_id, asyncio.Lock())
 
     def canonical(self, ext_id: str) -> str:
         """Die heutige Kennung zu `ext_id` (eine alte wird aufgelöst, alles andere bleibt)."""

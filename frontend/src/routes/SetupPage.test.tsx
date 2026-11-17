@@ -378,11 +378,11 @@ describe("SetupPage", () => {
     expect(screen.queryByText("Eigenen Code vorgeben (optional)")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Wo finde ich den Code?" }));
-    expect(screen.getByText("NODVARD_DECK_SETUP_CODE=dein-eigener-code")).toBeInTheDocument();
+    expect(screen.getByText("NODVARD_DECK_SETUP_CODE=HIER-EIGENEN-CODE-EINTRAGEN")).toBeInTheDocument();
     const help = screen.getByText(/Vor dem ersten Start kannst du/);
     expect(help).toHaveTextContent(/\.env.*Compose-Datei.*Portainer.*Environment variables/);
-    expect(help).toHaveTextContent(/mindestens 8 Buchstaben.*Trennzeichen zählen nicht mit/);
-    expect(help).toHaveTextContent(/leer oder zu kurz, erzeugt der Container selbst einen Code/);
+    expect(help).toHaveTextContent(/Platzhalter durch deinen Code.*mindestens 12 Buchstaben.*Trennzeichen zählen nicht mit/);
+    expect(help).toHaveTextContent(/leer oder zu kurz oder steht noch der Platzhalter da, erzeugt der Container selbst einen Code/);
     expect(help).toHaveTextContent(/Sobald ein Konto existiert, wird die Variable ignoriert/);
 
     await fillAccount("mein-eigener-code");

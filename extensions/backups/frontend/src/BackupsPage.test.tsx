@@ -14,7 +14,7 @@ const JOBS = [
  * Der Mock bildet den Server nach: `POST .../retry` liefert bei autonomy.mode=propose (Default) immer `status="proposed"`,
  * die Seite muss den Vorschlag also selbst bestätigen.
  */
-function mockFetch(opts: { jobs?: unknown[]; onRetry?: () => void; onApprove?: () => void; connections?: unknown[]; unprotected?: unknown; inventory?: unknown } = {}) {
+function mockFetch(opts: { jobs?: unknown[]; history?: unknown[]; onRetry?: () => void; onApprove?: () => void; connections?: unknown[]; unprotected?: unknown; inventory?: unknown } = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
@@ -26,6 +26,9 @@ function mockFetch(opts: { jobs?: unknown[]; onRetry?: () => void; onApprove?: (
     }
     if (url.endsWith("/ext/backups/unprotected")) {
       return new Response(JSON.stringify(opts.unprotected ?? { guests: [], errors: [] }), { status: 200 });
+    }
+    if (url.endsWith("/history") && opts.history) {
+      return new Response(JSON.stringify(opts.history), { status: 200 });
     }
     if (url.includes("/ext/backups/jobs") && !url.includes("/history") && !url.includes("/retry")) {
       return new Response(JSON.stringify(opts.jobs ?? JOBS), { status: 200 });
@@ -60,6 +63,25 @@ beforeEach(() => {
 });
 
 describe("BackupsPage Zusammenfassung", () => {
+  it("zeigt einen Sammeljob mit unklarem Gastergebnis ohne Erfolgsmeldung", async () => {
+    vi.stubGlobal("fetch", mockFetch({
+      jobs: [{ ...JOBS[0], last_status: "job_error" }],
+      history: [{ upid: "group", node: "pve2", status: "job_error", started_at: 1700000000, finished_at: 1700000300 }],
+    }));
+    render(<BackupsPage />);
+
+    expect(await screen.findByText("Job mit Fehlern, Gast unklar")).toHaveClass("text-amber-300");
+    expect(screen.getByText("1 Sicherungsjob: 1 ohne bestätigtes erfolgreiches Backup")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("alle zuletzt erfolgreich");
+    expect(screen.queryByText("Fehlgeschlagen")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Erneut versuchen" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Verlauf" }));
+    await waitFor(() => expect(screen.getAllByText(/Job mit Fehlern, Gast unklar/)).toHaveLength(2));
+    expect(screen.queryByRole("button", { name: /^Warum ist der Lauf/ })).toBeNull();
+    expect(screen.queryByTestId("failure-cause")).toBeNull();
+  });
+
   it.each([{ connections: [] }, { connections: [{ name: "pve1", base_url: "https://pve1:8006", enabled: true, has_token: true }] }])(
     "zeigt ohne Sicherungsjobs einen neutralen Leerzustand bei Verbindungen %j",
     async ({ connections }) => {

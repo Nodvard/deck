@@ -404,6 +404,7 @@ export function Cockpit() {
   const backupsUnreachable = backups?.unreachable_names ?? [];
   // Platzhalter nicht erreichbarer Server (`unreachable`) sind keine Dienste: sie zählen weder als „läuft“ noch als „läuft nicht“.
   const services = (overview?.services ?? []).filter((s) => !s.unreachable);
+  const unhealthyServices = services.filter((s) => s.state === "running" && s.tone === "warn");
   // Ein ausgeschalteter oder beim Anbieter gelöschter Gast hat kein Docker, das antworten könnte: keine Störung.
   const switchedOffNames = new Set(allHosts.filter((h) => healthOf(h) === "stopped").map((h) => h.display_name || h.name));
   const servicesDown = (overview?.services_unreachable_hosts ?? []).filter((name) => !switchedOffNames.has(name));
@@ -419,7 +420,7 @@ export function Cockpit() {
   // Nur für den Inhaber, der die Liste ändern darf (das filtert schon `GET /overview`).
   const proxyAddresses = (overview?.untrusted_proxies ?? []).map((p) => p.address);
   const legacyEnv = overview?.legacy_env ?? [];
-  const issues = problemHosts.length + servicesDownExtra.length + (backups?.failed ?? 0) + backupsUnreachable.length + attention.length + (overview?.pending_actions ?? 0);
+  const issues = problemHosts.length + servicesDownExtra.length + unhealthyServices.length + (backups?.failed ?? 0) + backupsUnreachable.length + attention.length + (overview?.pending_actions ?? 0);
 
   // Eigene Apps und erkannte Dienste in einer Liste (`services` bleibt für die Kennzahl „Dienste“).
   const apps = overview?.apps ?? [];
@@ -534,6 +535,7 @@ export function Cockpit() {
               overviewFailed ? unavailable
                 : servicesDown.length && services.length === 0 ? `unbekannt · ${servicesDownText}`
                 : servicesDown.length ? `Container laufen · ${servicesDownText}`
+                : unhealthyServices.length ? `${unhealthyServices.length} ${unhealthyServices.length === 1 ? "Container ist" : "Container sind"} ungesund`
                 : overview && services.length === 0 ? "noch keine erfasst"
                 : "Container laufen"
             }
@@ -661,6 +663,11 @@ export function Cockpit() {
                 {servicesDownExtra.map((name) => (
                   <p key={`services-unreachable-${name}`} className="flex items-center gap-2 px-4 py-3 text-sm">
                     <span className="status-dot problem" /> Container nicht abrufbar: {name}
+                  </p>
+                ))}
+                {unhealthyServices.map((service) => (
+                  <p key={`service-unhealthy-${service.id}`} className="flex items-center gap-2 px-4 py-3 text-sm">
+                    <span className="status-dot unknown" /> Container ungesund: {service.name}
                   </p>
                 ))}
                 {backupsUnreachable.map((name) => (
