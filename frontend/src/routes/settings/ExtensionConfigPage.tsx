@@ -74,6 +74,19 @@ function changedValues(schema: JsonSchema | null, saved: Record<string, unknown>
   return out;
 }
 
+/** Labels eines Listeneintrags wie im Kern: mit dem Namen, wie er gespeichert ist, und ohne Leerzeichen am Rand. */
+function itemSecretLabels(template: string, item: Record<string, unknown>): string[] {
+  const name = String(item.name ?? "");
+  return [...new Set([name, name.trim()])].filter(Boolean).map((n) => template.replace("{name}", n));
+}
+
+function slotOfTemplate(template: string, slot: { label: string; item?: string | null }): boolean {
+  const [before, after = ""] = template.split("{name}");
+  const { label } = slot;
+  if (!slot.item || label.length < before.length + after.length || !label.startsWith(before) || !label.endsWith(after)) return false;
+  return label.slice(before.length, label.length - after.length).trim() === slot.item;
+}
+
 interface SecretSpec {
   label: string;
   per_item?: string;
@@ -135,13 +148,15 @@ function pendingSecretClears(schema: (JsonSchema & { "x-secrets"?: unknown }) | 
       for (const item of items(saved[spec.per_item])) {
         const name = nameOf(item);
         if (!name) continue;
-        const label = spec.label.replace("{name}", name);
+        const labels = itemSecretLabels(spec.label, item);
         if (names.indexOf(name) !== names.lastIndexOf(name)) {
-          out.set(label, "twice");
+          for (const label of labels) out.set(label, "twice");
           continue;
         }
         const after = now.get(name);
-        if (after === undefined || bound.some((p) => targetMoved(itemSchema, p, item, after))) out.set(label, "moved");
+        if (after === undefined || bound.some((p) => targetMoved(itemSchema, p, item, after))) {
+          for (const label of labels) out.set(label, "moved");
+        }
       }
     } else if (bound.some((p) => targetMoved(schema ?? undefined, p, saved, current))) {
       out.set(spec.label, "moved");
@@ -166,7 +181,7 @@ function secretsWithoutTarget(schema: (JsonSchema & { "x-secrets"?: unknown }) |
       const list = saved[spec.per_item];
       for (const item of Array.isArray(list) ? (list as Record<string, unknown>[]) : []) {
         const name = item && typeof item === "object" ? String(item.name ?? "").trim() : "";
-        if (name && missing(itemSchema, item)) out.add(spec.label.replace("{name}", name));
+        if (name && missing(itemSchema, item)) for (const label of itemSecretLabels(spec.label, item)) out.add(label);
       }
     } else if (missing(schema ?? undefined, saved)) {
       out.add(spec.label);
@@ -394,7 +409,7 @@ function ConnectionCard({
   const validTestUrl = !testUrl || (testUrl.startsWith(`/ext/${encodeURIComponent(extId)}/`) && !/[\\%?#\s\u0000-\u001f\u007f]/.test(testUrl) && !testUrl.split("/").some((part) => part === "." || part === ".."));
   const specs = (schema as JsonSchema & { "x-secrets"?: SecretSpec[] })["x-secrets"] ?? [];
   const visibleSlots = uniqueSlots(slots).filter((slot) => {
-    const spec = specs.find((entry) => entry.label.replace("{name}", slot.item ?? "") === slot.label);
+    const spec = specs.find((entry) => (entry.per_item ? slotOfTemplate(entry.label, slot) : entry.label === slot.label));
     return schemaVisible(spec?.["x-visible-when"], schema, values);
   });
   useEffect(() => { setResult(null); setFailure(null); }, [values, slots]);

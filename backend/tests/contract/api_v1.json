@@ -3349,6 +3349,9 @@
     "405": [
      "application/json"
     ],
+    "409": [
+     "application/json"
+    ],
     "413": [
      "application/json"
     ],
@@ -21785,6 +21788,9 @@
     "200": [
      "application/json"
     ],
+    "400": [
+     "application/json"
+    ],
     "401": [
      "application/json"
     ],
@@ -25312,6 +25318,119 @@
     ],
     "503": [
      "application/json"
+    ],
+    "507": [
+     "application/json"
+    ]
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/findings/exclude-folder": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "additional_properties": false,
+     "fields": {
+      "all_servers": {
+       "type": "boolean"
+      },
+      "folder": {
+       "required": true,
+       "type": "string"
+      },
+      "host_id": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "response_content_types": {
+    "200": [
+     "application/json"
+    ],
+    "401": [
+     "application/json"
+    ],
+    "403": [
+     "application/json"
+    ],
+    "405": [
+     "application/json"
+    ],
+    "409": [
+     "application/json"
+    ],
+    "413": [
+     "application/json"
+    ],
+    "422": [
+     "application/json"
+    ],
+    "500": [
+     "application/json",
+     "text/plain"
+    ],
+    "507": [
+     "application/json"
+    ]
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/findings/reopen-folder": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "additional_properties": false,
+     "fields": {
+      "folder": {
+       "required": true,
+       "type": "string"
+      },
+      "host_id": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "response_content_types": {
+    "200": [
+     "application/json"
+    ],
+    "401": [
+     "application/json"
+    ],
+    "403": [
+     "application/json"
+    ],
+    "405": [
+     "application/json"
+    ],
+    "409": [
+     "application/json"
+    ],
+    "413": [
+     "application/json"
+    ],
+    "422": [
+     "application/json"
+    ],
+    "500": [
+     "application/json",
+     "text/plain"
     ],
     "507": [
      "application/json"
@@ -29317,6 +29436,119 @@
     ],
     "503": [
      "application/json"
+    ],
+    "507": [
+     "application/json"
+    ]
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/findings/exclude-folder": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "additional_properties": false,
+     "fields": {
+      "all_servers": {
+       "type": "boolean"
+      },
+      "folder": {
+       "required": true,
+       "type": "string"
+      },
+      "host_id": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "response_content_types": {
+    "200": [
+     "application/json"
+    ],
+    "401": [
+     "application/json"
+    ],
+    "403": [
+     "application/json"
+    ],
+    "405": [
+     "application/json"
+    ],
+    "409": [
+     "application/json"
+    ],
+    "413": [
+     "application/json"
+    ],
+    "422": [
+     "application/json"
+    ],
+    "500": [
+     "application/json",
+     "text/plain"
+    ],
+    "507": [
+     "application/json"
+    ]
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/findings/reopen-folder": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "additional_properties": false,
+     "fields": {
+      "folder": {
+       "required": true,
+       "type": "string"
+      },
+      "host_id": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "response_content_types": {
+    "200": [
+     "application/json"
+    ],
+    "401": [
+     "application/json"
+    ],
+    "403": [
+     "application/json"
+    ],
+    "405": [
+     "application/json"
+    ],
+    "409": [
+     "application/json"
+    ],
+    "413": [
+     "application/json"
+    ],
+    "422": [
+     "application/json"
+    ],
+    "500": [
+     "application/json",
+     "text/plain"
     ],
     "507": [
      "application/json"
@@ -36504,6 +36736,125 @@
       "values": {
        "required": true,
        "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:ext_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "response_content_types": {
+    "200": [
+     "application/json"
+    ],
+    "400": [
+     "application/json"
+    ],
+    "401": [
+     "application/json"
+    ],
+    "403": [
+     "application/json"
+    ],
+    "404": [
+     "application/json"
+    ],
+    "405": [
+     "application/json"
+    ],
+    "409": [
+     "application/json"
+    ],
+    "413": [
+     "application/json"
+    ],
+    "422": [
+     "application/json"
+    ],
+    "429": [
+     "application/json"
+    ],
+    "500": [
+     "application/json",
+     "text/plain"
+    ],
+    "503": [
+     "application/json"
+    ],
+    "507": [
+     "application/json"
+    ]
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "schema": {
+       "type": "null|object"
+      },
+      "secrets": {
+       "items": {
+        "fields": {
+         "description": {
+          "type": "null|string"
+         },
+         "is_set": {
+          "type": "boolean"
+         },
+         "item": {
+          "type": "null|string"
+         },
+         "label": {
+          "type": "string"
+         },
+         "optional": {
+          "type": "boolean"
+         },
+         "title": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "secrets_cleared": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "values": {
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/extensions/{ext_id}/settings/fingerprint": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "additional_properties": false,
+     "fields": {
+      "connection": {
+       "required": true,
+       "type": "string"
+      },
+      "current_password": {
+       "type": "string"
+      },
+      "sha256": {
+       "required": true,
+       "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
       }
      },
      "type": "object"

@@ -150,8 +150,8 @@ class Extension(NodvardExtension):
             while True:
                 self._tick_count += 1
                 await ctx.events.publish(Event(name="hello.tick", payload={"count": self._tick_count}))
-                # `ctx.events.publish()` geht nur auf den geteilten „events“-Kanal, `ctx.ws.broadcast()` zusätzlich auf den
-                # themenspezifischen aus `Refresh.ws_channel`, den das Widget abonniert.
+                # `ctx.events.publish()` erreicht nur Handler im Prozess (`hello.*` geht nicht über WebSocket), die
+                # Oberfläche erreicht `ctx.ws.broadcast()` auf dem Kanal aus `Refresh.ws_channel`, den das Widget abonniert.
                 await ctx.ws.broadcast("tick", {"count": self._tick_count})
                 await asyncio.sleep(2.0)
 

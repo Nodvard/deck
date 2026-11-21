@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from nodvard_sdk import sha256_fingerprint
 from nodvard_sdk.addresses import same_target
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +21,8 @@ TEST_KEY_PREFIX = "extension.test."
 
 
 def secret_slots_spec(schema: dict[str, Any] | None, values: dict[str, Any]) -> list[dict[str, Any]]:
-    """Die Geheimnisse aus `x-secrets`; `per_item` erzeugt eines je Listeneintrag (über dessen `name`)."""
+    """Die Geheimnisse aus `x-secrets`; `per_item` erzeugt eines je Listeneintrag (über dessen `name`).
+    `labels` nennt alle Labels, unter denen das Geheimnis liegen kann (`item_secret_labels`)."""
     slots: list[dict[str, Any]] = []
     for spec in (schema or {}).get("x-secrets") or []:
         per_item = spec.get("per_item")
@@ -28,10 +30,27 @@ def secret_slots_spec(schema: dict[str, Any] | None, values: dict[str, Any]) -> 
             for item in values.get(per_item) or []:
                 name = str((item or {}).get("name") or "").strip()
                 if name:
-                    slots.append({**spec, "label": spec["label"].replace("{name}", name), "item": name})
+                    slots.append({
+                        **spec, "label": spec["label"].replace("{name}", name), "item": name,
+                        "labels": item_secret_labels(spec, item),
+                    })
         else:
-            slots.append({**spec, "item": None})
+            slots.append({**spec, "item": None, "labels": [spec["label"]]})
     return slots
+
+
+def secret_slot_for(schema: dict[str, Any] | None, values: dict[str, Any], label: str) -> dict[str, Any] | None:
+    """Das Geheimnis aus `x-secrets`, zu dem `label` gehört, auch beim Namen mit Leerzeichen am Rand, sonst `None`."""
+    for spec in (schema or {}).get("x-secrets") or []:
+        per_item = spec.get("per_item")
+        if not per_item:
+            if spec["label"] == label:
+                return {**spec, "item": None, "labels": [label]}
+            continue
+        for item in values.get(per_item) or []:
+            if isinstance(item, dict) and label in item_secret_labels(spec, item):
+                return {**spec, "label": label, "item": _item_name(item).strip(), "labels": [label]}
+    return None
 
 
 def _path_value(values: Any, path: str) -> Any:
@@ -74,6 +93,17 @@ def _targets_moved(
     )
 
 
+def _item_name(item: dict[str, Any]) -> str:
+    return str(item.get("name") or "")
+
+
+def item_secret_labels(spec: dict[str, Any], item: dict[str, Any]) -> list[str]:
+    """Labels, unter denen Module das Geheimnis eines Listeneintrags suchen: mit dem Namen, wie er gespeichert ist,
+    und ohne Leerzeichen am Rand."""
+    name = _item_name(item)
+    return [spec["label"].replace("{name}", n) for n in dict.fromkeys((name, name.strip())) if n]
+
+
 def secrets_to_clear(schema: dict[str, Any] | None, old: dict[str, Any], new: dict[str, Any]) -> list[str]:
     """Labels der Geheimnisse, die nach der Änderung nicht mehr stehen bleiben dürfen (ihr Ziel hat sich geändert)."""
     # Ein Geheimnis gehört zu dem Ziel (`x-secret-bound-to`), bei dem es gesetzt wurde; zöge das Ziel um, ginge es sonst
@@ -85,31 +115,86 @@ def secrets_to_clear(schema: dict[str, Any] | None, old: dict[str, Any], new: di
         per_item = spec.get("per_item")
         if per_item:
             items_schema = (((schema or {}).get("properties") or {}).get(per_item) or {}).get("items")
-            new_items = [(str(i.get("name") or "").strip(), i) for i in new.get(per_item) or [] if isinstance(i, dict)]
-            new_by_name = dict(new_items)
-            # Zwei Einträge mit demselben Namen teilen sich ein Label; je nach Modul und Reihenfolge gälte der erste
-            # oder der letzte, und das Geheimnis ginge an die falsche Adresse.
-            twice = {name for name, count in Counter(name for name, _ in new_items).items() if name and count > 1}
-            old_names = {
-                str((i or {}).get("name") or "").strip() for i in old.get(per_item) or [] if isinstance(i, dict)
-            }
+            new_items = [i for i in new.get(per_item) or [] if isinstance(i, dict)]
+            old_items = [i for i in old.get(per_item) or [] if isinstance(i, dict)]
+            new_by_name = {_item_name(i): i for i in new_items}
+            old_names = {_item_name(i) for i in old_items}
+            # Zwei Einträge mit demselben Label teilen sich ein Geheimnis; je nach Modul und Reihenfolge gälte der
+            # erste oder der letzte, und das Geheimnis ginge an die falsche Adresse.
+            shared = Counter(label for i in new_items for label in item_secret_labels(spec, i))
             # Ein neuer Eintrag startet ohne Geheimnis: Was unter seinem Namen noch liegt (etwa von einer
             # entfernten Verbindung), gehörte zu einem anderen Ziel. Fällt ein Eintrag weg oder wird
             # umbenannt, fällt auch sein Geheimnis weg.
-            for name in new_by_name:
-                if name and (name not in old_names or name in twice):
-                    out.append(spec["label"].replace("{name}", name))
-            for item in old.get(per_item) or []:
-                name = str((item or {}).get("name") or "").strip()
-                if not name:
-                    continue
-                label = spec["label"].replace("{name}", name)
-                current = new_by_name.get(name)
+            for item in new_items:
+                labels = item_secret_labels(spec, item)
+                if _item_name(item) not in old_names:
+                    out.extend(labels)
+                out.extend(label for label in labels if shared[label] > 1)
+            for item in old_items:
+                current = new_by_name.get(_item_name(item))
                 if current is None or _targets_moved(bound, item, current, schema, items_schema):
-                    out.append(label)
+                    out.extend(item_secret_labels(spec, item))
         elif _targets_moved(bound, old, new, schema):
             out.append(spec["label"])
     return list(dict.fromkeys(out))
+
+
+SKIP_VERIFY_FIELD = "tls_insecure_skip_verify"
+PIN_FIELD = "tls_fingerprint_sha256"
+
+
+def _tls_state(values: Any, pin_known: bool = True) -> tuple[str, str | None]:
+    """Was die Verbindung wirklich prüft, wie die Module es auswerten: ein Fingerabdruck geht vor dem Schalter."""
+    values = values if isinstance(values, dict) else {}
+    raw = values.get(PIN_FIELD) if pin_known else None
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return "pin", sha256_fingerprint(raw)
+        except ValueError:
+            return "locked", None  # ein ungültiger Eintrag sperrt die Verbindung
+    if values.get(SKIP_VERIFY_FIELD) is True:
+        return "off", None
+    return "ca", None
+
+
+def tls_weakened(before: Any, after: Any, *, pin_known: bool = True) -> bool:
+    """Ob die Zertifikatsprüfung nachher ein Zertifikat annimmt, das sie vorher abgelehnt hätte.
+
+    `pin_known=False` für Module ohne Fingerabdruck im Schema: dort prüft nichts einen solchen Eintrag."""
+    old, new = _tls_state(before, pin_known), _tls_state(after, pin_known)
+    # Strenger wird es nur ohne Prüfung vorher oder mit Sperre nachher; jeder andere Wechsel lässt neue Zertifikate zu.
+    return old != new and old[0] != "off" and new[0] != "locked"
+
+
+def secrets_exposed_by_tls(schema: dict[str, Any] | None, old: dict[str, Any], new: dict[str, Any]) -> list[str]:
+    """Labels der Geheimnisse, die stehen bleiben, deren Ziel aber eine schwächere Zertifikatsprüfung bekommt."""
+    out: list[str] = []
+    props = (schema or {}).get("properties") or {}
+    for spec in (schema or {}).get("x-secrets") or []:
+        per_item = spec.get("per_item")
+        if not per_item:
+            if tls_weakened(old, new, pin_known=PIN_FIELD in props):
+                out.append(spec["label"])
+            continue
+        item_props = ((props.get(per_item) or {}).get("items") or {}).get("properties") or {}
+        pin_known = PIN_FIELD in item_props
+        old_by_name = {_item_name(i): i for i in old.get(per_item) or [] if isinstance(i, dict)}
+        for item in new.get(per_item) or []:
+            if not isinstance(item, dict) or _item_name(item) not in old_by_name:
+                continue
+            if tls_weakened(old_by_name[_item_name(item)], item, pin_known=pin_known):
+                out.extend(item_secret_labels(spec, item))
+    return list(dict.fromkeys(out))
+
+
+def pinnable_lists(schema: dict[str, Any] | None) -> list[str]:
+    """Listenfelder des Schemas, deren Einträge einen Fingerabdruck haben (z. B. `connections`)."""
+    out = []
+    for key, sub in ((schema or {}).get("properties") or {}).items():
+        item_props = ((sub or {}).get("items") or {}).get("properties") or {} if isinstance(sub, dict) else {}
+        if (sub or {}).get("type") == "array" and PIN_FIELD in item_props and "name" in item_props:
+            out.append(key)
+    return out
 
 
 def secret_target_missing(schema: dict[str, Any] | None, values: dict[str, Any], slot: dict[str, Any]) -> bool:
@@ -183,7 +268,7 @@ def missing_fields(schema: dict[str, Any] | None, values: dict[str, Any]) -> lis
 def missing_secrets(schema: dict[str, Any] | None, values: dict[str, Any], present_labels: set[str]) -> list[str]:
     out: list[str] = []
     for spec in secret_slots_spec(schema, values):
-        if spec.get("optional") or spec["label"] in present_labels:  # optional: läuft auch ohne
+        if spec.get("optional") or present_labels.intersection(spec["labels"]):  # optional: läuft auch ohne
             continue
         title = str(spec.get("title") or spec["label"])
         out.append(f"Zugangsdaten fehlen: {title}" + (f" ({spec['item']})" if spec.get("item") else "") + ".")

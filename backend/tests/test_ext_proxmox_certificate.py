@@ -259,6 +259,22 @@ async def test_a_changed_certificate_stops_the_connection_until_the_new_one_is_c
         assert refused.json()["code"] == "certificate_mismatch" and refused.json()["sha256"] == new
         assert (await _ext_settings(db_session, ext_id))["connections"][0]["tls_fingerprint_sha256"] == old
 
+        # Mit hinterlegtem Token geht der neue Fingerabdruck nur über den Kern, mit Passwort.
+        label = f"{ext_id}-token:pve1"
+        busy = await client.post(
+            f"/api/v1/ext/{ext_id}/connections/pve1/certificate", json={"sha256": new}, headers=_h(token),
+        )
+        assert busy.status_code == 409, busy.text
+        assert busy.json()["code"] == "stored_secret" and "sha256" not in busy.json()
+        assert f"„{label}“" in busy.json()["detail"]
+        assert (await _ext_settings(db_session, ext_id))["connections"][0]["tls_fingerprint_sha256"] == old
+        token_id = (await _ext_settings(db_session, ext_id))["connections"][0]["token_id"]
+        gone = await client.request(
+            "DELETE", f"/api/v1/extensions/{ext_id}/secrets", params={"label": label},
+            json={"current_password": "correct-horse-battery"}, headers=_h(token),
+        )
+        assert gone.status_code == 204, gone.text
+
         confirmed = await client.post(
             f"/api/v1/ext/{ext_id}/connections/pve1/certificate",
             json={"sha256": new.replace(":", "").lower()}, headers=_h(token),
@@ -273,6 +289,9 @@ async def test_a_changed_certificate_stops_the_connection_until_the_new_one_is_c
             "connection": "pve1", "address": fake_pve["base_url"], "fingerprint": new, "previous_fingerprint": old,
             "trusted": False, "via": ext_id,
         }
+        value = fake_pve["state"]["tokens"][token_id]["value"]
+        stored = await client.post(f"/api/v1/ext/{ext_id}/connections/pve1/token", json={"value": value}, headers=_h(token))
+        assert stored.status_code == 204, stored.text
         assert (await _health(ext_id)).healthy is True, ext_id
 
 

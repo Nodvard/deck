@@ -62,6 +62,7 @@ from ..db.base import refresh_relationships, utcnow
 from ..db.session import get_engine, session_scope
 from ..models import Action, Host, HostMerge, HostTag, NotificationDelivery, Secret, Setting, User
 from ..services import audit as audit_service
+from ..services import extension_settings
 from ..services.hosts import host_to_sdk as _host_to_sdk
 from .runtime import ExtensionRuntime, LoadedExtension, SpawnTarget, SupervisedTask
 from .tables import GUARD_OPTION, TableGuard, validate_table_prefix
@@ -302,18 +303,26 @@ class CapabilitiesHandle:
             self._runtime.capabilities.provide(self._ext_id, proto, implementation)
 
     async def query(self, protocol: type) -> list[Any]:
-        """Nur Capabilities von Extensions, die in `requires` deklariert sind (docs/02 §2); alte Kennungen in
-        `requires` gelten weiter."""
+        """Capabilities aus `requires`, ohne Ausführungszugriff des Kerns."""
+        from nodvard_sdk.capabilities import (
+            ActionExecutor, CommandRunner, ConsoleTarget, ScopedTerminalTarget, ServiceCatalog, TerminalTarget,
+        )
+
+        core_only = (ActionExecutor, CommandRunner, TerminalTarget, ScopedTerminalTarget, ConsoleTarget)
+        if protocol in core_only:
+            return []
         allowed = self._allowed | {self._runtime.canonical(ext_id) for ext_id in self._allowed}
-        from nodvard_sdk.capabilities import ServiceCatalog
 
         if protocol is ServiceCatalog:
             return [
                 _DelegatedServiceCatalog(impl, self._ext_id, provider_id)
                 for provider_id, impl in self._runtime.capabilities.query_named(protocol)
-                if provider_id in allowed
+                if provider_id in allowed and not isinstance(impl, core_only)
             ]
-        return self._runtime.capabilities.query(protocol, allowed_ext_ids=allowed)
+        return [
+            impl for impl in self._runtime.capabilities.query(protocol, allowed_ext_ids=allowed)
+            if not isinstance(impl, core_only)
+        ]
 
 
 class _DelegatedServiceCatalog:
@@ -1087,16 +1096,30 @@ class SettingsHandle:
 
     async def set(self, values: dict[str, Any]) -> None:
         """Speichert die Werte ohne Schema-Validierung (`declare()`) und ruft danach `on_settings_changed`."""
+        await self._change(lambda _: values)
+
+    async def update(self, key: str, transform: Callable[[Any], Any]) -> None:
+        """Ändert einen Schlüssel unter der gemeinsamen Einstellungssperre."""
+        def change(values: dict[str, Any]) -> dict[str, Any]:
+            values[key] = transform(values.get(key))
+            return values
+
+        await self._change(change)
+
+    async def _change(self, transform: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
         from ..services.extensions import get_record
 
-        async with session_scope() as session:
-            record = await get_record(session, self._store_id)
-            if record is not None:
-                record.settings = values
-                await session.flush()
+        async with extension_settings.lock_for(self._store_id):
+            async with session_scope() as session:
+                record = await get_record(session, self._store_id)
+                values = transform(dict(record.settings or {}) if record else {})
+                if record is not None:
+                    record.settings = values
+                    await session.flush()
 
-        # Erst nach dem Commit, damit der Hook per get() die neuen Werte liest. Ein set() aus dem Hook löst ihn nicht
-        # erneut aus, und ein Fehler im Hook lässt das gespeicherte set() nicht nachträglich scheitern.
+        await self._notify_changed(values)
+
+    async def _notify_changed(self, values: dict[str, Any]) -> None:
         hook = getattr(self._loaded.instance, "on_settings_changed", None)
         if hook is None or self._in_hook.get():
             return
@@ -1327,19 +1350,38 @@ class AuditHandle:
 
 
 class WsHandle:
-    def __init__(self, ext_id: str, legacy_ids: Callable[[], Sequence[str]] | None = None) -> None:
+    def __init__(
+        self,
+        ext_id: str,
+        legacy_ids: Callable[[], Sequence[str]] | None = None,
+        widgets: Callable[[], Sequence[WidgetSpec]] | None = None,
+    ) -> None:
         self._ext_id = ext_id
         # Alte Kennungen (`legacy_ids`), bei jedem Senden nach dem letzten Scan gefragt
         # (`ExtensionRuntime.legacy_ids_of`).
         self._legacy_ids = legacy_ids
+        self._widgets = widgets
 
     async def broadcast(self, channel: str, payload: dict[str, Any]) -> None:
-        """Sendet auf `ext.<Kennung>.<Kanal>` und nach einer Umbenennung auch auf den Kanälen der alten Kennungen."""
+        """Sendet auf `ext.<Kennung>.<Kanal>` und nach einer Umbenennung auch auf den Kanälen der alten Kennungen.
+
+        Empfänger sind Konten, die eine Kachel dieses Moduls mit dem Kanal sehen dürfen; ohne Kachel nur `*`."""
+        from ..core.rbac import has_all
         from ..core.ws_hub import get_ws_hub
 
+        channels = [f"ext.{ext_id}.{channel}" for ext_id in (self._ext_id, *(self._legacy_ids() if self._legacy_ids else ()))]
+        needed = [
+            list(spec.permissions)
+            for spec in (self._widgets() if self._widgets else ())
+            if spec.refresh.ws_channel in channels
+        ]
+
+        def audience(_user_id: str, permissions: list[str]) -> bool:
+            return "*" in permissions or any(has_all(permissions, required) for required in needed)
+
         hub = get_ws_hub()
-        for ext_id in (self._ext_id, *(self._legacy_ids() if self._legacy_ids else ())):
-            await hub.publish(f"ext.{ext_id}.{channel}", payload)
+        for name in channels:
+            await hub.publish(name, payload, audience=audience)
 
 
 class ConnectorsHandle:
@@ -2029,7 +2071,11 @@ def build_context(
         events=EventsHandle(perm, manifest.id, own_ids=[store, *manifest.legacy_ids]),
         notify=NotifyHandle(perm, manifest.id),
         audit=AuditHandle(perm, manifest.id),
-        ws=WsHandle(manifest.id, lambda: runtime.legacy_ids_of(manifest.id)),
+        ws=WsHandle(
+            manifest.id,
+            lambda: runtime.legacy_ids_of(manifest.id),
+            lambda: [spec for ext_id, spec in runtime.ui.all_widgets() if ext_id == manifest.id],
+        ),
         db=DbHandle(manifest.id, manifest.table_prefixes),
         http=HttpHandle(perm, granted_permissions),
         logger=logging.getLogger(f"nodvard_deck.ext.{manifest.id}"),

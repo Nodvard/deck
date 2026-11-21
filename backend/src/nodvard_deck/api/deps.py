@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +28,7 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
+    request: Request,
     session: SessionDep,
     settings: SettingsDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)],
@@ -60,6 +61,7 @@ async def get_current_user(
     # Abmelden, „überall abmelden“ und der Passwortwechsel wirken so sofort, nicht erst, wenn das Token abläuft.
     if not await session_guard.login_is_live(session, user.id, sid):
         raise unauthorized
+    request.state.login_id = sid
     known_actors.add_user(user.id)
     # Die Route wartet danach oft auf einen Fremddienst; hielte die Anmeldung die Verbindung bis dahin, leerten viele
     # Widgets zugleich den Pool (`QueuePool limit … reached`).
@@ -92,6 +94,21 @@ async def get_current_session_id(
 
 
 CurrentSessionId = Annotated[str | None, Depends(get_current_session_id)]
+
+
+async def get_verified_session_id(request: Request, user: CurrentUser) -> str:
+    """Die `sid`, die `get_current_user` in dieser Anfrage geprüft hat; ohne sie 401, statt ungebunden weiterzumachen."""
+    sid = getattr(request.state, "login_id", None)
+    if not isinstance(sid, str) or not sid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Bitte neu anmelden.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return sid
+
+
+VerifiedSessionId = Annotated[str, Depends(get_verified_session_id)]
 
 
 def require_permission(permission: str):

@@ -362,6 +362,7 @@ describe("BackupsPage ConnectionsPanel", () => {
 
   it("fragt vor dem Entfernen einer Verbindung nach und entfernt sie danach", async () => {
     let deleted = false;
+    const order: string[] = [];
     const conn = { name: "pve2", base_url: "https://x:8006", token_id: "t", tls_insecure_skip_verify: false, enabled: true, has_token: true };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
@@ -372,19 +373,147 @@ describe("BackupsPage ConnectionsPanel", () => {
       if (url.endsWith("/ext/backups/connections") && method === "GET") {
         return new Response(JSON.stringify(deleted ? [] : [conn]), { status: 200 });
       }
+      if (url.endsWith("/extensions/backups/secrets?label=backups-token%3Apve2") && method === "DELETE") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        order.push(body.current_password ? "token-mit-passwort" : "token");
+        if (!body.current_password) {
+          return new Response(JSON.stringify({ detail: "Bitte Passwort.", code: "confirm_required", two_factor: false }), { status: 403 });
+        }
+        return new Response(null, { status: 204 });
+      }
       if (url.endsWith("/ext/backups/connections/pve2") && method === "DELETE") {
+        order.push("verbindung");
         deleted = true;
         return new Response(null, { status: 204 });
       }
       throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
+    window.__nodvardDeck.confirmIdentity = vi.fn().mockResolvedValue({ current_password: "pw" });
     render(<BackupsPage />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Entfernen" }));
 
     await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("pve2"), expect.anything()));
     await waitFor(() => expect(deleted).toBe(true));
+    expect(order).toEqual(["token", "token-mit-passwort", "verbindung"]);
+  });
+
+  it("Name mit Leerzeichen am Ende: Umschalten und Entfernen treffen genau diese Verbindung, nicht die gleichnamige", async () => {
+    const calls: string[] = [];
+    const base = { base_url: "https://x:8006", token_id: "t", tls_insecure_skip_verify: false, enabled: true, has_token: true };
+    const conns = [{ ...base, name: "pve1 " }, { ...base, name: "pve1" }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/ext/backups/jobs") && !url.includes("/history") && !url.includes("/retry")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.endsWith("/ext/backups/connections") && method === "GET") return new Response(JSON.stringify(conns), { status: 200 });
+      if (method !== "GET") {
+        calls.push(`${method} ${url.replace(/^.*\/api\/v1/, "")}`);
+        return method === "PUT" ? new Response(JSON.stringify(conns[0]), { status: 200 }) : new Response(null, { status: 204 });
+      }
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<BackupsPage />);
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "aktiv" }))[0]);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    fireEvent.click((await screen.findAllByRole("button", { name: "Entfernen" }))[0]);
+    await waitFor(() => expect(calls).toHaveLength(3));
+
+    expect(calls).toEqual([
+      "PUT /ext/backups/connections/pve1%20",
+      "DELETE /extensions/backups/secrets?label=backups-token%3Apve1%20",
+      "DELETE /ext/backups/connections/pve1%20",
+    ]);
+  });
+
+  it("sagt, wenn das Token schon gelöscht ist, die Verbindung aber stehen blieb", async () => {
+    let tokenDropped = false;
+    let readsAfterDrop = 0;
+    const order: string[] = [];
+    const conn = { name: "pve2", base_url: "https://x:8006", token_id: "t", tls_insecure_skip_verify: false, enabled: true, has_token: true };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/ext/backups/jobs") && !url.includes("/history") && !url.includes("/retry")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.endsWith("/ext/backups/connections") && method === "GET") {
+        if (tokenDropped) readsAfterDrop += 1;
+        return new Response(JSON.stringify([{ ...conn, has_token: !tokenDropped }]), { status: 200 });
+      }
+      if (url.endsWith("/extensions/backups/secrets?label=backups-token%3Apve2") && method === "DELETE") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        order.push(body.current_password ? "token-mit-passwort" : "token");
+        if (!body.current_password) {
+          return new Response(JSON.stringify({ detail: "Bitte Passwort.", code: "confirm_required", two_factor: false }), { status: 403 });
+        }
+        tokenDropped = true;
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/ext/backups/connections/pve2") && method === "DELETE") {
+        order.push("verbindung");
+        return new Response(JSON.stringify({ detail: "Speichern fehlgeschlagen." }), { status: 500 });
+      }
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.__nodvardDeck.confirmIdentity = vi.fn().mockResolvedValue({ current_password: "pw" });
+    render(<BackupsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Entfernen" }));
+
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("pve2"), expect.anything()));
+    expect(await screen.findByText(/Das Token ist gelöscht, die Verbindung aber noch da: Speichern fehlgeschlagen/)).toBeInTheDocument();
+    expect(order).toEqual(["token", "token-mit-passwort", "verbindung"]);
+    await waitFor(() => expect(readsAfterDrop).toBeGreaterThan(0));
+    const row = (await screen.findByText("fehlt")).closest("tr");
+    expect(row?.textContent).toContain("pve2");
+    expect(screen.getByRole("button", { name: "Token setzen" })).toBeInTheDocument();
+  });
+
+  it("lässt die Verbindung stehen, wenn die Passwort-Rückfrage zum Token abgebrochen wird", async () => {
+    let deleted = false;
+    const order: string[] = [];
+    const conn = { name: "pve2", base_url: "https://x:8006", token_id: "t", tls_insecure_skip_verify: false, enabled: true, has_token: true };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/ext/backups/jobs") && !url.includes("/history") && !url.includes("/retry")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.endsWith("/ext/backups/connections") && method === "GET") {
+        return new Response(JSON.stringify(deleted ? [] : [conn]), { status: 200 });
+      }
+      if (url.endsWith("/extensions/backups/secrets?label=backups-token%3Apve2") && method === "DELETE") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        order.push(body.current_password ? "token-mit-passwort" : "token");
+        if (!body.current_password) {
+          return new Response(JSON.stringify({ detail: "Bitte Passwort.", code: "confirm_required", two_factor: false }), { status: 403 });
+        }
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/ext/backups/connections/pve2") && method === "DELETE") {
+        order.push("verbindung");
+        deleted = true;
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.__nodvardDeck.confirmIdentity = vi.fn().mockResolvedValue(null);
+    render(<BackupsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Entfernen" }));
+
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("pve2"), expect.anything()));
+    await waitFor(() => expect(order).toEqual(["token"]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(deleted).toBe(false);
   });
 
   it("zeigt Gäste ohne Backup-Job -- und nichts, wenn alles erfasst ist", async () => {
@@ -561,6 +690,27 @@ describe("BackupsPage ConnectionsPanel", () => {
     await waitFor(() => expect(posted).toEqual([{ changes: { "keep-last": 1 } }]));
     expect(confirm.mock.calls[0][1]).toMatchObject({ danger: true });
     expect(await screen.findByText("Geändert: Letzte 3 → 1.")).toBeInTheDocument();
+  });
+
+  it("Job bearbeiten: Gäste anderer Jobs derselben Verbindung zählen nicht mit", async () => {
+    const jobs = [
+      { ...JOBS[0], job_ref: "pve2--west--nightly--100", job_id: "west--nightly", vmid: "100", name: "docker" },
+      { ...JOBS[0], job_ref: "pve2--west--weekly--200", job_id: "west--weekly", vmid: "200", name: "nextcloud" },
+    ];
+    const base = mockFetch({ jobs });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/config")) {
+        return new Response(JSON.stringify({ job_id: "west--nightly", schedule: "02:00", enabled: true, storage: "backup-pve1", mode: "snapshot",
+          "keep-last": 3, "keep-daily": 0, "keep-weekly": 0, "keep-monthly": 0, "keep-yearly": 0 }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<BackupsPage />);
+    fireEvent.click((await screen.findAllByRole("button", { name: "Job bearbeiten" }))[0]);
+    const form = await screen.findByTestId(`job-edit-${jobs[0].job_ref}`);
+    expect(form.textContent).toContain("Gilt für alle Gäste dieses Jobs: docker");
+    expect(form.textContent).not.toContain("nextcloud");
   });
 
   /** Eine tote Verbindung (pve1 aus) versteckt nicht mehr alle anderen Jobs. */

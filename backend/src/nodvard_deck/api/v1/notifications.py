@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...models import Notification, User
 from ...services import audit as audit_service
 from ...services import notifications as notifications_service
+from ...services.actor_labels import may_see_other_users
 from ..deps import CurrentUser, SessionDep, require_permission
 from ..models import RequestModel
 from ..responses import error_responses
@@ -44,9 +45,9 @@ class NotificationOut(BaseModel):
     payload: dict[str, Any]
 
     @classmethod
-    def from_model(cls, n: Notification) -> "NotificationOut":
+    def from_model(cls, n: Notification, viewer_id: str | None = None) -> "NotificationOut":
         return cls(
-            id=n.id, ts=n.ts, severity=n.severity, title=n.title, body=n.body,
+            id=n.id, ts=n.ts, severity=n.severity, title=n.title, body=notifications_service.body_for(n, viewer_id),
             source_ext_id=n.source_ext_id, correlation_id=n.correlation_id,
             read_at=n.read_at, payload=n.payload,
         )
@@ -74,6 +75,11 @@ async def _audit_interrupted_delete(session: AsyncSession, actor_id: str, delete
         log.exception("Protokolleintrag fuer das unterbrochene Loeschen gelesener Meldungen ging nicht")
 
 
+def _viewer_id(user: User) -> str | None:
+    """Wer andere Konten nicht sehen darf, bekommt keine Kontomeldungen zu ihnen."""
+    return None if may_see_other_users(user) else user.id
+
+
 class MarkReadIn(RequestModel):
     ids: list[str] = Field(min_length=1)
 
@@ -81,19 +87,23 @@ class MarkReadIn(RequestModel):
 @router.get("", responses=error_responses(401, 403, 507))
 async def list_notifications(
     session: SessionDep,
+    user: CurrentUser,
     unread: bool | None = None,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0, le=9223372036854775807),
 ) -> list[NotificationOut]:
-    rows = await notifications_service.list_notifications(session, unread=unread, limit=limit, offset=offset)
-    return [NotificationOut.from_model(n) for n in rows]
+    viewer_id = _viewer_id(user)
+    rows = await notifications_service.list_notifications(
+        session, unread=unread, limit=limit, offset=offset, viewer_id=viewer_id
+    )
+    return [NotificationOut.from_model(n, viewer_id) for n in rows]
 
 
 # Muss vor `/{notification_id}` stehen, sonst fängt jene Route "unread-count" als ID ab.
 @router.get("/unread-count", responses=error_responses(401, 403, 507))
-async def get_unread_count(session: SessionDep) -> dict[str, int]:
+async def get_unread_count(session: SessionDep, user: CurrentUser) -> dict[str, int]:
     """Zahl der ungelesenen Meldungen für den Zähler im Menü, ohne die Liste zu laden."""
-    return {"unread": await notifications_service.unread_count(session)}
+    return {"unread": await notifications_service.unread_count(session, viewer_id=_viewer_id(user))}
 
 
 @router.post(
@@ -126,11 +136,12 @@ async def delete_read_notifications(session: SessionDep, user: CurrentUser) -> d
 
 
 @router.get("/{notification_id}", responses=error_responses(401, 403, 404, 507))
-async def get_notification(notification_id: str, session: SessionDep) -> NotificationOut:
-    row = await notifications_service.get_notification(session, notification_id)
+async def get_notification(notification_id: str, session: SessionDep, user: CurrentUser) -> NotificationOut:
+    viewer_id = _viewer_id(user)
+    row = await notifications_service.get_notification(session, notification_id, viewer_id=viewer_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannte Benachrichtigung.")
-    return NotificationOut.from_model(row)
+    return NotificationOut.from_model(row, viewer_id)
 
 
 @router.post(
@@ -150,8 +161,8 @@ async def mark_read(payload: MarkReadIn, session: SessionDep) -> dict[str, int]:
     responses=error_responses(401, 403, 404, 507),
 )
 async def delete_notification(notification_id: str, session: SessionDep, user: CurrentUser) -> Response:
-    title = await notifications_service.delete_notification(session, notification_id)
-    if title is None:
+    detail = await notifications_service.delete_for_log(session, notification_id)
+    if detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannte Benachrichtigung.")
-    await _audit_deleted(session, user, target_id=notification_id, detail={"title": title})
+    await _audit_deleted(session, user, target_id=notification_id, detail=detail)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

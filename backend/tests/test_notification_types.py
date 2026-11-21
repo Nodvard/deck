@@ -295,3 +295,13 @@ def test_catalog_combines_core_types_and_installed_extension_metadata(tmp_path):
     }), encoding="utf-8")
     assert catalog(tmp_path) == core_types | {"example.finished": "Vorgang abgeschlossen"}
     assert defaults(catalog(tmp_path))["example.finished"] == {"enabled": True, "priority": None}
+
+
+def test_catalog_ignores_broken_extension_metadata(tmp_path):
+    from nodvard_deck.services.notification_types import TYPES as core_types
+
+    extension = tmp_path / "broken"
+    extension.mkdir()
+    (extension / "notification-types.json").write_text("{kaputt", encoding="utf-8")
+
+    assert catalog(tmp_path) == core_types

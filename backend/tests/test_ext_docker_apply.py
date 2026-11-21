@@ -5,7 +5,10 @@ Teil 1 (rein): `image_apply.py` ohne Host. Die Flüsse gegen ein Fake-Docker ste
 from __future__ import annotations
 
 import json
+import os
 import shlex
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -344,10 +347,33 @@ def test_the_commands_reproduce_the_project_exactly():
     ia = _ia()
     t = target()
     common = ["docker", "compose", "--ansi", "never", "-p", "nextcloud", "--project-directory", "/opt/nextcloud", "-f", "/opt/nextcloud/docker-compose.yml"]
+    common = ["sh", "-c", 'cd -- "$1" || exit 1; shift; exec "$@"', "sh", t.working_dir, *common]
     assert shlex.split(ia.pull_command(t)) == common + ["pull", "app"]
     assert shlex.split(ia.up_command(t)) == common + ["up", "-d", "--no-deps", "--no-build", "app"]
     assert shlex.split(ia.display_command(t)) == common + ["pull", "app", "&&"] + common + ["up", "-d", "--no-deps", "--no-build", "app"]
     assert "--wait" not in ia.display_command(t)
+
+
+@pytest.mark.skipif(shutil.which("sh") is None or sys.platform == "win32", reason="braucht eine POSIX-Shell")
+@pytest.mark.parametrize("command", ["pull_command", "up_command", "cmd_config", "cmd_config_hash"])
+@pytest.mark.parametrize("env_names", [(), ("TOKEN",)])
+def test_image_update_commands_run_in_the_project_folder(tmp_path, command, env_names):
+    ia = _ia()
+    folder = tmp_path / "mein stack"
+    folder.mkdir()
+    (folder / "relative.txt").write_text("gefunden\n", encoding="utf-8")
+    fake = tmp_path / "bin" / "docker"
+    fake.parent.mkdir()
+    fake.write_text('#!/bin/sh\nprintf \'%s\\n\' "$PWD"\ncat relative.txt\n', encoding="utf-8")
+    fake.chmod(0o755)
+    t = target(working_dir=str(folder), config_files=(f"{folder}/compose.yml",), env_names=env_names)
+    env = {**os.environ, "PATH": f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}", "PWD": "/"}
+    done = subprocess.run(
+        ["sh", "-c", getattr(ia, command)(t)], cwd="/", env=env,
+        capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == f"{folder}\ngefunden\n"
 
 
 def test_several_files_env_files_and_paths_with_spaces_are_quoted_exactly():
@@ -356,6 +382,7 @@ def test_several_files_env_files_and_paths_with_spaces_are_quoted_exactly():
         working_dir="/opt/mein stack", config_files=("/opt/mein stack/a.yml", "/opt/mein stack/b override.yml"), env_files=("/opt/mein stack/x.env",),
     )
     argv = shlex.split(ia.pull_command(t))
+    assert argv[:5] == ["sh", "-c", 'cd -- "$1" || exit 1; shift; exec "$@"', "sh", "/opt/mein stack"]
     assert argv[argv.index("--project-directory") + 1] == "/opt/mein stack"
     assert [argv[i + 1] for i, a in enumerate(argv) if a == "-f"] == ["/opt/mein stack/a.yml", "/opt/mein stack/b override.yml"]
     assert argv[argv.index("--env-file") + 1] == "/opt/mein stack/x.env"
@@ -751,6 +778,7 @@ class FakeApplyDocker:
         self.config_rc = 0
         self.hash_stdout = ""
         self.fail_apply_inspect = False
+        self.fail_named_inspect = False
         self.add("nextcloud-app")
 
     def add(self, name: str, *, image: str = "nextcloud:30-apache", image_id: str = IMG_ID, lbls: dict | None = None, state: str = "running") -> dict:
@@ -792,6 +820,8 @@ class FakeApplyDocker:
             if handled is not None:
                 return handled
         argv = shlex.split(command)
+        if argv[:4] == ["sh", "-c", 'cd -- "$1" || exit 1; shift; exec "$@"', "sh"]:
+            argv = argv[5:]
         if command.startswith("docker container inspect --format '{\"id\""):
             if self.fail_apply_inspect:
                 raise OSError("Verbindung weg")
@@ -804,8 +834,13 @@ class FakeApplyDocker:
         if argv[:3] == ["docker", "ps", "-q"]:
             return FakeResult(stdout="".join(i + "\n" for i in self.running_ids()))
         if argv[:5] == ["docker", "container", "inspect", "--format", "{{.Name}}|{{.Config.Image}}|{{.Image}}"]:
+            if self.fail_named_inspect:
+                return FakeResult(stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock", exit_code=1)
             found = [self.resolve(a) for a in argv[5:]]
-            return FakeResult(stdout="".join(f"{i['name']}|{i['image']}|{i['image_id']}\n" for i in found if i))
+            out = "".join(f"{i['name']}|{i['image']}|{i['image_id']}\n" for i in found if i)
+            if not all(found):
+                return FakeResult(stdout=out, stderr="Error response from daemon: No such container: gone", exit_code=1)
+            return FakeResult(stdout=out)
         if argv[:3] == ["docker", "image", "inspect"] and argv[-1] != "nextcloud:30-apache" and "{{.Id}}" not in command:
             digests = self.images.get(argv[-1])
             if digests is None:
@@ -827,9 +862,9 @@ class FakeApplyDocker:
                 if i["labels"].get(L("project")) == main.get(L("project")) and i["labels"].get(L("service")) == main.get(L("service"))
             ]
             return FakeResult(stdout="\n".join(rows) + "\n")
-        if command.startswith("docker compose") and " config --format json" in command:
+        if argv[:2] == ["docker", "compose"] and argv[-3:] == ["config", "--format", "json"]:
             return FakeResult(self.config_rc, self.config_stdout, self.config_stderr)
-        if command.startswith("docker compose") and " config --hash " in command:
+        if argv[:2] == ["docker", "compose"] and argv[-3:-1] == ["config", "--hash"]:
             return FakeResult(stdout=self.hash_stdout)
         return await self.run_run(command)
 
@@ -978,6 +1013,17 @@ async def test_recheck_of_a_vanished_container_drops_its_entry_and_works_without
     assert fresh_service.snapshot()["hosts"]["h1"]["checked_at"] is None
 
 
+@pytest.mark.asyncio
+async def test_recheck_keeps_the_previous_result_when_docker_fails(tmp_path):
+    docker = FakeApplyDocker()
+    service, _, ctx = await checked(tmp_path, docker)
+    before = service.result_for("h1", "nextcloud-app")
+    docker.fail_named_inspect = True
+
+    assert await service.recheck_container(ctx.host, "nextcloud-app") == before
+    assert service.result_for("h1", "nextcloud-app") == before
+
+
 def test_the_named_inspect_builder_checks_names_itself():
     iu = _iu()
     assert shlex.split(iu.cmd_inspect_named(["a", "b.c"]))[3:] == ["--format", "{{.Name}}|{{.Config.Image}}|{{.Image}}", "a", "b.c"]
@@ -1039,7 +1085,7 @@ async def test_image_updates_keep_saved_stack_env_names(tmp_path, matching):
     seen = []
 
     async def config(command):
-        if command.startswith("sh -c") and " config " in command:
+        if command.startswith("sh -c") and "-u PWD" in command and " config " in command:
             seen.append(command)
             return FakeResult(stdout=docker.config_stdout if "--format json" in command else docker.hash_stdout)
         return None

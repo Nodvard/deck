@@ -630,6 +630,68 @@ async def test_executor_refuses_to_stop_the_container_the_dashboard_runs_in(monk
     assert not any(c.startswith("docker stop") for c in exec_handle.commands)
 
 
+def _inspect_json(image: str) -> _FakeExecResult:
+    return _FakeExecResult(0, json.dumps([{"Config": {"Image": image}}]) + "\n")
+
+
+@pytest.mark.asyncio
+async def test_executor_refuses_to_stop_the_dashboard_image_with_a_custom_hostname():
+    import nodvard_deck_ext_docker.capabilities as caps
+
+    exec_handle = _RecordingExec({
+        "docker inspect -f": _FakeExecResult(0, _OTHER_ID + "\n"),
+        "docker inspect --type container": _inspect_json("ghcr.io/nodvard/deck:0.14.1"),
+    })
+    result = await caps.DockerContainerExecutor(_ExecutorCtx(exec_handle)).execute(_request("container.stop", "deck"))
+    assert result.success is False
+    assert "Nodvard Deck selbst" in (result.error or "")
+    assert not any(c.startswith("docker stop") for c in exec_handle.commands)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing", ["docker inspect -f", "docker inspect --type container"])
+async def test_executor_does_not_stop_when_the_self_check_fails(failing):
+    import nodvard_deck_ext_docker.capabilities as caps
+
+    exec_handle = _RecordingExec({
+        "docker inspect -f": _FakeExecResult(0, _OTHER_ID + "\n"),
+        "docker inspect --type container": _inspect_json("nginx:1"),
+        failing: _FakeExecResult(126, ""),
+    })
+    result = await caps.DockerContainerExecutor(_ExecutorCtx(exec_handle)).execute(_request("container.stop", "web"))
+    assert result.success is False
+    assert "ließ sich nicht prüfen" in (result.error or "")
+    assert not any(c.startswith("docker stop") for c in exec_handle.commands)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output", ["kein json\n", "[]\n", json.dumps([{"Config": {}}]) + "\n", json.dumps({"Config": {"Image": "x"}}) + "\n"])
+async def test_executor_does_not_stop_when_inspect_output_is_unreadable(output):
+    import nodvard_deck_ext_docker.capabilities as caps
+
+    exec_handle = _RecordingExec({
+        "docker inspect -f": _FakeExecResult(0, _OTHER_ID + "\n"),
+        "docker inspect --type container": _FakeExecResult(0, output),
+    })
+    result = await caps.DockerContainerExecutor(_ExecutorCtx(exec_handle)).execute(_request("container.stop", "web"))
+    assert result.success is False
+    assert "ließ sich nicht prüfen" in (result.error or "")
+    assert not any(c.startswith("docker stop") for c in exec_handle.commands)
+
+
+@pytest.mark.asyncio
+async def test_executor_stops_an_ordinary_container_after_both_checks():
+    import nodvard_deck_ext_docker.capabilities as caps
+
+    exec_handle = _RecordingExec({
+        "docker inspect -f": _FakeExecResult(0, _OTHER_ID + "\n"),
+        "docker inspect --type container": _inspect_json("nginx:1"),
+        "docker container inspect": _running_state(),
+    })
+    result = await caps.DockerContainerExecutor(_ExecutorCtx(exec_handle)).execute(_request("container.stop", "web"))
+    assert any(c == "docker stop web" for c in exec_handle.commands), result.error
+
+
 _OTHER_ID = "0123456789ab" * 5 + "0011"
 
 

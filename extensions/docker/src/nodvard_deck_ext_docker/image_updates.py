@@ -567,6 +567,8 @@ class ImageUpdateService:
                 run.fallback = {k: a for k, a in state.remote.items() if now - a.fetched_at < CACHE_TTL_S}
                 run.remote = dict(run.fallback)  # bewusst ohne `force`
             found = await self._exec(host, cmd_inspect_named([name]), LOCAL_TIMEOUT_S)
+            if found.exit_code != 0 and "no such container" not in (found.stderr or "").lower():
+                return state.results.get(name) if state else None
             rows = parse_containers(found.stdout) if found.exit_code == 0 else []
             if not rows:
                 if state:

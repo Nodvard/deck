@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 # weil Erweiterungen einander nicht importieren.
 FIELD = "tls_fingerprint_sha256"
 CHANGED_CODE = "certificate_changed"
+STORED_SECRET_CODE = "stored_secret"
 INVALID_CODE = "certificate_invalid"
 AUDIT_ACTION = "backups.certificate_confirmed"
 READ_TIMEOUT_S = 10.0
@@ -35,6 +36,23 @@ MISMATCH_TEXT = (
     "noch einmal in Proxmox (Knoten → System → Zertifikate)."
 )
 
+
+def _tls_state(conn: dict[str, Any]) -> tuple[str, str | None]:
+    """Was die Verbindung wirklich prüft: ein Fingerabdruck geht vor dem Schalter, ein ungültiger sperrt sie."""
+    try:
+        pin = normalize_fingerprint(conn.get(FIELD))
+    except ValueError:
+        return "locked", None
+    if pin is not None:
+        return "pin", pin
+    return ("off", None) if conn.get("tls_insecure_skip_verify") is True else ("ca", None)
+
+
+def tls_weakened(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    """Ob die Verbindung nachher ein Zertifikat annimmt, das sie vorher abgelehnt hätte."""
+    old, new = _tls_state(before), _tls_state(after)
+    # Strenger wird es nur ohne Prüfung vorher oder mit Sperre nachher; jeder andere Wechsel lässt neue Zertifikate zu.
+    return old != new and old[0] != "off" and new[0] != "locked"
 
 def normalize_fingerprint(value: Any) -> str | None:
     """`None` für „nicht eingetragen“ (fehlt, leer), sonst `AB:CD:...` (32 Paare, wie Proxmox sie zeigt).
@@ -105,6 +123,8 @@ class CertificateConfirmIn(BaseModel):
 
 def build_certificate_router(ctx: ExtensionContext) -> APIRouter:
     """`GET` und `POST /connections/{name}/certificate`, mit derselben Berechtigung wie die übrigen Verbindungs-Routen."""
+    from .config import TOKEN_LABEL, stored_secret_text  # config braucht connector, connector dieses Modul
+
     router = APIRouter()
 
     async def _connection(name: str) -> dict[str, Any]:
@@ -157,7 +177,14 @@ def build_certificate_router(ctx: ExtensionContext) -> APIRouter:
                 detail="Die Verbindung hat sich in der Zwischenzeit geändert. Lade die Seite neu und prüfe noch einmal.",
             )
         old = current.get(FIELD)
+        before = dict(current)
         current.update({FIELD: cert.sha256, "tls_insecure_skip_verify": False})
+        if tls_weakened(before, current) and await ctx.secrets.exists(f"{TOKEN_LABEL}:{name}"):
+            # Mit hinterlegtem Token geht das nur über die Einstellungen des Kerns, mit Passwort.
+            return JSONResponse(
+                status_code=http_status.HTTP_409_CONFLICT,
+                content={"detail": stored_secret_text(f"{TOKEN_LABEL}:{name}"), "code": STORED_SECRET_CODE},
+            )
         await ctx.settings.set({**settings, "connections": connections})
         try:
             await ctx.audit.log(

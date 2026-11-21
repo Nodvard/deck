@@ -232,6 +232,7 @@ async def test_a_start_that_stays_up_says_so():
 @pytest.mark.asyncio
 async def test_stop_and_a_failed_start_are_not_checked():
     exec_handle = _Exec({"docker start web": [(1, "", "Error: port is already allocated")], "docker stop web": [(0, "web\n", "")],
+                         "docker inspect --type container": [(0, '[{"Config": {"Image": "nginx:1"}}]\n', "")],
                          "docker inspect": [(0, "f" * 64 + "\n", "")]})
     executor = _caps().DockerContainerExecutor(_ctx(exec_handle))
     failed = await executor.execute(_req("container.start", {"container": "web"}))

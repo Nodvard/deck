@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from nodvard_sdk import FilePlace
@@ -10,6 +11,8 @@ from .capabilities import MAX_COMPOSE_DIRS, DockerServiceCatalog
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
+
+log = logging.getLogger("nodvard_deck.ext.docker")
 
 
 class DockerFilePlaces:
@@ -26,7 +29,11 @@ class DockerFilePlaces:
             return []
         # Der Ordner steht als Etikett `com.docker.compose.project.working_dir` an jedem Compose-Container; der Katalog
         # merkt ihn sich beim `docker ps`.
-        dirs = await self._catalog.compose_dirs(host)
+        try:
+            dirs = await self._catalog.compose_dirs(host)
+        except Exception as exc:  # noqa: BLE001 - Orte sind optional, der Dateimanager bleibt erreichbar
+            log.warning("file_places_failed host=%s error=%s", host_id, type(exc).__name__)
+            return []
         return [
             FilePlace(label=f"Docker: {project}", path=dirs[project], icon="boxes", hint=f"Ordner des Compose-Projekts „{project}“")
             for project in sorted(dirs)[:MAX_COMPOSE_DIRS]

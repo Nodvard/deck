@@ -681,6 +681,34 @@ function ScrollArrows({ edges, row }) {
 
 // ../../_shared/frontend/src/certificate.tsx
 import { useEffect as useEffect6, useState as useState5 } from "react";
+
+// ../../_shared/frontend/src/connectionToken.ts
+var STORED_SECRET_CODE = "stored_secret";
+async function failIfNotOk(res) {
+  if (res.ok) return;
+  const body = await res.json().catch(() => ({}));
+  throw new Error(errorFromBody(body, res.status));
+}
+async function dropConnectionToken(extId, label) {
+  const res = await authedFetchConfirmed(
+    `/extensions/${extId}/secrets?label=${encodeURIComponent(label)}`,
+    (confirmation) => ({ method: "DELETE", body: JSON.stringify(confirmation ?? {}) })
+  );
+  if (res === null) return false;
+  await failIfNotOk(res);
+  return true;
+}
+async function pinInSettings(extId, connection, sha256) {
+  const res = await authedFetchConfirmed(`/extensions/${extId}/settings/fingerprint`, (confirmation) => ({
+    method: "PUT",
+    body: JSON.stringify({ connection, sha256, ...confirmation })
+  }));
+  if (res === null) return false;
+  await failIfNotOk(res);
+  return true;
+}
+
+// ../../_shared/frontend/src/certificate.tsx
 import { jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
 function CertificateStatus({ connection }) {
   if (connection.tls_fingerprint_invalid) {
@@ -743,8 +771,16 @@ function ConnectionCertificate({
         setConfirmed(false);
         throw new Error(errorFromBody(body, res.status));
       }
-      if (!res.ok) throw new Error(errorFromBody(body, res.status));
-      setInfo(body);
+      if (res.status === 409 && body.code === STORED_SECRET_CODE) {
+        if (!await pinInSettings(extId, connection, info.sha256)) return;
+        const fresh = await authedFetch(path);
+        const freshBody = await fresh.json().catch(() => ({}));
+        if (!fresh.ok) throw new Error(errorFromBody(freshBody, fresh.status));
+        setInfo(freshBody);
+      } else {
+        if (!res.ok) throw new Error(errorFromBody(body, res.status));
+        setInfo(body);
+      }
       setConfirmed(false);
       setMessage("Gemerkt. Nodvard Deck spricht jetzt nur mit dem Server, der genau dieses Zertifikat zeigt.");
       onSaved?.();
@@ -1449,7 +1485,7 @@ function StorageSection({ pools, focusNode = null }) {
         ] }),
         Object.values(pool.other ?? {}).length > 0 && /* @__PURE__ */ jsx9("span", { className: "block opacity-60", children: Object.values(pool.other ?? {}).map((o) => `${o.count} ${o.label} (${formatBytes2(o.size)})`).join(", ") })
       ] }),
-      /* @__PURE__ */ jsxs9("td", { "data-label": "Belegung", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 align-top text-xs`, children: [
+      /* @__PURE__ */ jsx9("td", { "data-label": "Belegung", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 align-top text-xs`, children: pool.active === false ? /* @__PURE__ */ jsx9("span", { className: "text-red-300", children: "nicht erreichbar" }) : /* @__PURE__ */ jsxs9(Fragment5, { children: [
         /* @__PURE__ */ jsx9("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", role: "progressbar", "aria-valuenow": pool.used_percent ?? 0, "aria-valuemin": 0, "aria-valuemax": 100, children: /* @__PURE__ */ jsx9("div", { className: `h-full ${BAR_TONE[pool.tone] ?? BAR_TONE.neutral}`, ref: styleRef({ width: `${Math.min(100, pool.used_percent ?? 0)}%` }) }) }),
         /* @__PURE__ */ jsxs9("span", { className: "opacity-70", children: [
           formatBytes2(pool.used ?? 0),
@@ -1457,7 +1493,7 @@ function StorageSection({ pools, focusNode = null }) {
           formatBytes2(pool.total ?? 0),
           pool.used_percent != null ? ` (${pool.used_percent} %)` : ""
         ] })
-      ] })
+      ] }) })
     ] }, pool.id)) })
   ] }) });
 }
@@ -2039,7 +2075,7 @@ function ConnectionsPanel({
     setPending(`toggle:${conn.name}`);
     setMessage(null);
     try {
-      const res = await authedFetch(`/ext/proxmox/connections/${conn.name}`, {
+      const res = await authedFetch(`/ext/proxmox/connections/${encodeURIComponent(conn.name)}`, {
         method: "PUT",
         body: JSON.stringify({ enabled: !conn.enabled })
       });
@@ -2062,15 +2098,20 @@ function ConnectionsPanel({
     if (!ok) return;
     setPending(`remove:${name}`);
     setMessage(null);
+    let tokenGone = false;
     try {
-      const res = await authedFetch(`/ext/proxmox/connections/${name}`, { method: "DELETE" });
+      if (!await dropConnectionToken("proxmox", `proxmox-token:${name}`)) return;
+      tokenGone = true;
+      const res = await authedFetch(`/ext/proxmox/connections/${encodeURIComponent(name)}`, { method: "DELETE" });
       if (!res.ok && res.status !== 204) {
         const body = await res.json().catch(() => ({}));
         throw new Error(errorFromBody(body, res.status));
       }
       load();
     } catch (err) {
-      setMessage(`Fehler: ${err instanceof Error ? err.message : String(err)}`);
+      const reason = err instanceof Error ? err.message : String(err);
+      setMessage(tokenGone ? `Das Token ist gel\xF6scht, die Verbindung aber noch da: ${reason}` : `Fehler: ${reason}`);
+      if (tokenGone) load();
     } finally {
       setPending(null);
     }
@@ -2759,7 +2800,7 @@ function Summary({ nodes, guests, connections, updates, pools, updatesIncomplete
   else {
     const fullest = [...pools].filter((p) => p.used_percent != null).sort((a, b) => (b.used_percent ?? 0) - (a.used_percent ?? 0))[0];
     const unavailable = pools.find((p) => p.used_percent == null && p.tone === "danger");
-    storageTile = unavailable ? { value: "!", hint: `${unavailable.storage}${unavailable.shared ? "" : ` (${unavailable.node})`} nicht verf\xFCgbar`, tone: "bad" } : fullest ? {
+    storageTile = unavailable ? { value: "!", hint: `${unavailable.storage}${unavailable.shared ? "" : ` (${unavailable.node})`} nicht erreichbar`, tone: "bad" } : fullest ? {
       value: `${Math.round(fullest.used_percent ?? 0)} %`,
       hint: `am vollsten: ${fullest.storage}${fullest.shared ? "" : ` (${fullest.node})`}`,
       tone: fullest.tone === "danger" ? "bad" : fullest.tone === "warn" ? "warn" : "good"

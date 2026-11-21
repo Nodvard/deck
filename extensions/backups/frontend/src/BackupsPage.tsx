@@ -10,6 +10,7 @@ import type { FormEvent } from "react";
 import { ACTION_STATUS_LABEL, isActionRunning, RUNNING_IN_BACKGROUND, settleAction } from "../../../_shared/frontend/src/actions";
 import { authedFetch, authedFetchConfirmed, errorFromBody, errorText } from "../../../_shared/frontend/src/api";
 import { CertificateStatus, ConnectionCertificate } from "../../../_shared/frontend/src/certificate";
+import { dropConnectionToken } from "../../../_shared/frontend/src/connectionToken";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
@@ -30,8 +31,14 @@ interface ConnectionOut {
   has_token: boolean;
 }
 
+/** Job-ID einer Zeile; ältere Antworten ohne `job_id` tragen sie als zweiten Teil der Referenz. */
+function jobIdOf(job: { job_id?: string; job_ref: string }): string {
+  return job.job_id ?? job.job_ref.split("--")[1] ?? "";
+}
+
 interface JobOut {
   job_ref: string;
+  job_id?: string;
   connection: string;
   vmid: string;
   name: string;
@@ -447,7 +454,7 @@ function ConnectionsPanel(): JSX.Element {
     setPending(`toggle:${conn.name}`);
     setMessage(null);
     try {
-      const res = await authedFetch(`/ext/backups/connections/${conn.name}`, {
+      const res = await authedFetch(`/ext/backups/connections/${encodeURIComponent(conn.name)}`, {
         method: "PUT", body: JSON.stringify({ enabled: !conn.enabled }),
       });
       if (!res.ok) {
@@ -470,15 +477,21 @@ function ConnectionsPanel(): JSX.Element {
     if (!ok) return;
     setPending(`remove:${name}`);
     setMessage(null);
+    let tokenGone = false;
     try {
-      const res = await authedFetch(`/ext/backups/connections/${name}`, { method: "DELETE" });
+      // Das Token löscht nur der Kern, mit Passwort; erst danach geht die Verbindung.
+      if (!(await dropConnectionToken("backups", `backups-token:${name}`))) return;
+      tokenGone = true;
+      const res = await authedFetch(`/ext/backups/connections/${encodeURIComponent(name)}`, { method: "DELETE" });
       if (!res.ok && res.status !== 204) {
         const body = await res.json().catch(() => ({}));
         throw new Error(errorFromBody(body, res.status));
       }
       load();
     } catch (err) {
-      setMessage(`Fehler: ${err instanceof Error ? err.message : String(err)}`);
+      const reason = err instanceof Error ? err.message : String(err);
+      setMessage(tokenGone ? `Das Token ist gelöscht, die Verbindung aber noch da: ${reason}` : `Fehler: ${reason}`);
+      if (tokenGone) load();
     } finally {
       setPending(null);
     }
@@ -965,7 +978,7 @@ export function BackupsPage(): JSX.Element {
                     <td role="cell" colSpan={7} className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] bg-black/20 sm:py-2`}>
                       <JobEditForm
                         job={job}
-                        guests={(jobs ?? []).filter((j) => j.connection === job.connection && j.job_ref.split("--")[1] === job.job_ref.split("--")[1]).map((j) => j.name)}
+                        guests={(jobs ?? []).filter((j) => j.connection === job.connection && jobIdOf(j) === jobIdOf(job)).map((j) => j.name)}
                         onDone={(text) => {
                           setEditing(null);
                           if (text) {

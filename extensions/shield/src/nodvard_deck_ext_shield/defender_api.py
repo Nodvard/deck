@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -31,6 +32,7 @@ from . import updates as up
 from .defender import (
     DEFAULT_CRONS,
     Defender,
+    ExcludeRefused,
     _describe,
     max_filesize_mb,
     watch_interval_min,
@@ -471,6 +473,19 @@ class _Fail2banIn(BaseModel):
     jails: list[str] = Field(max_length=256)
 
 
+class _ExcludeFolderIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    host_id: str = Field(max_length=64)
+    folder: str = Field(max_length=1024)
+    all_servers: bool = False
+
+
+class _ReopenFolderIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    host_id: str = Field(max_length=64)
+    folder: str = Field(max_length=1024)
+
+
 class _RealtimeIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -588,11 +603,38 @@ def _threats(n: int) -> str:
     return "1 Bedrohung" if n == 1 else f"{n} Bedrohungen"
 
 
+SCAN_WITHOUT_QUARANTINE = (
+    "Der Scan läuft. Funde werden nicht automatisch in die Quarantäne verschoben, weil du keine Befehle auf Servern "
+    "ausführen darfst. Sie bleiben offen, bis jemand mit diesem Recht sie prüft."
+)
+
+
+def _granted(check: Any) -> Any:
+    """Dependency mit denselben Parametern wie `check`, die statt 403 `False` ergibt."""
+
+    async def granted(*args: Any, **kwargs: Any) -> bool:
+        try:
+            result = check(*args, **kwargs)
+            if inspect.isawaitable(result):
+                await result
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_403_FORBIDDEN:
+                raise
+            return False
+        return True
+
+    granted.__signature__ = inspect.signature(check, eval_str=True).replace(return_annotation=bool)  # type: ignore[attr-defined]
+    return granted
+
+
 def build_routers(
     ctx: ExtensionContext, defender: Defender, updates: UpdateCenter | None = None, guard: Guard | None = None,
 ) -> tuple[APIRouter, APIRouter]:
     read = APIRouter(prefix="/defender")
     manage = APIRouter(prefix="/defender")
+    # Vorschläge laufen als root auf dem Server, bei voller Autonomie ohne Freigabe: dafür braucht es das Recht dazu.
+    execute = [Depends(ctx.api.require_permission("hosts.execute"))]
+    may_execute = _granted(ctx.api.require_permission("hosts.execute"))
 
     async def _hosts(host_ids: list[str] | str) -> list:
         targets = await defender.target_hosts()
@@ -798,7 +840,7 @@ def build_routers(
         responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
                    for code in (400,)},
     )
-    async def start_scan(payload: _ScanIn) -> dict:
+    async def start_scan(payload: _ScanIn, allowed: bool = Depends(may_execute)) -> dict:
         given = [p.strip() for p in payload.paths or [] if p.strip()]
         if payload.kind == "custom" and not given:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Für einen eigenen Scan bitte mindestens einen Ordner angeben.")
@@ -809,8 +851,13 @@ def build_routers(
                 detail=f"Ordner bitte mit vollem Pfad ab „/“ angeben, zum Beispiel /var/www. Nicht so: {', '.join(relative[:3])}.",
             )
         paths = given or None
-        ids = await defender.start_scans(await _hosts(payload.host_ids), payload.kind, paths=paths, trigger="manual")
-        return {"scans": ids}
+        # Die Quarantäne läuft als root: Ohne dieses Recht bleiben Funde dieses Scans liegen.
+        ids = await defender.start_scans(
+            await _hosts(payload.host_ids), payload.kind, paths=paths, trigger="manual", auto_quarantine=allowed,
+        )
+        if allowed:
+            return {"scans": ids}
+        return {"scans": ids, "auto_quarantine": False, "hint": SCAN_WITHOUT_QUARANTINE}
 
     @manage.post(
         "/updates/check",
@@ -901,7 +948,7 @@ def build_routers(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     @manage.post(
-        "/hosts/{host_id}/fail2ban", dependencies=[Depends(ctx.api.require_permission("hosts.execute"))],
+        "/hosts/{host_id}/fail2ban", dependencies=execute,
         responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
                    for code in (400, 404, 409)},
     )
@@ -922,7 +969,7 @@ def build_routers(
         return await _propose(host, ACTION_FAIL2BAN_CONFIG, fields, reason, actor, Risk.MEDIUM)
 
     @manage.post(
-        "/hosts/{host_id}/ban",
+        "/hosts/{host_id}/ban", dependencies=execute,
         responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
                    for code in (400, 404, 409)},
     )
@@ -944,7 +991,7 @@ def build_routers(
                               f"{ip} auf {host.display_name or host.name} {verb} (Fail2ban)", actor, Risk.LOW)
 
     @manage.post(
-        "/hosts/{host_id}/upgrade",
+        "/hosts/{host_id}/upgrade", dependencies=execute,
         responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
                    for code in (404, 409)},
     )
@@ -979,7 +1026,7 @@ def build_routers(
         return found
 
     @manage.post(
-        "/updates/propose-all",
+        "/updates/propose-all", dependencies=execute,
         responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
                    for code in (409,)},
     )
@@ -1089,7 +1136,7 @@ def build_routers(
         return {"hosts": len(hosts), **await defender.start_audits(hosts, trigger="manual")}
 
     @manage.post(
-        "/findings/{finding_id}/quarantine",
+        "/findings/{finding_id}/quarantine", dependencies=execute,
         responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
                    for code in (409,)},
     )
@@ -1123,7 +1170,48 @@ def build_routers(
         return {"ok": True}
 
     @manage.post(
-        "/findings/{finding_id}/{action}",
+        "/findings/exclude-folder", dependencies=[*execute, Depends(ctx.api.require_permission("extensions.manage"))],
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (409,)},
+    )
+    async def exclude_folder(payload: _ExcludeFolderIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
+        """Nimmt einen Ordner mit offenen Funden aus den Scans aus und schließt die Funde darin.
+
+        Die Ausnahme gilt für alle Server, darum braucht es wie auf der Einstellungsseite `extensions.manage`."""
+        if not payload.all_servers:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Die Ausnahme gilt für alle Server. Das muss ausdrücklich bestätigt werden.",
+            )
+        try:
+            result = await defender.exclude_folder_for_findings(payload.host_id, payload.folder)
+        except ExcludeRefused as err:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Dieser Ordner lässt sich nicht ausnehmen: {err}") from err
+        folder, closed = result
+        await ctx.audit.log(
+            action=f"{EXT_ID}.folder_excluded", outcome="success", reason=f"{payload.host_id}:{folder} ({closed} Funde)", actor=actor,
+        )
+        return {"ok": True, "folder": folder, "closed": closed}
+
+    @manage.post(
+        "/findings/reopen-folder",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (409,)},
+    )
+    async def reopen_folder(payload: _ReopenFolderIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
+        """Öffnet die Funde wieder, die das Ausnehmen eines Ordners geschlossen hat. Die Ausnahme selbst bleibt."""
+        try:
+            reopened = await defender.reopen_folder(payload.host_id, payload.folder)
+        except ExcludeRefused as err:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(err)) from err
+        await ctx.audit.log(
+            action=f"{EXT_ID}.folder_findings_reopened", outcome="success",
+            reason=f"{payload.host_id}:{payload.folder} ({reopened} Funde)", actor=actor,
+        )
+        return {"ok": True, "reopened": reopened}
+
+    @manage.post(
+        "/findings/{finding_id}/{action}", dependencies=execute,
         responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
                    for code in (404, 409)},
     )
@@ -1146,7 +1234,7 @@ def build_routers(
                               error_status=status.HTTP_409_CONFLICT)
 
     @manage.post(
-        "/realtime/{host_id}",
+        "/realtime/{host_id}", dependencies=execute,
         responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
                    for code in (400, 404, 409)},
     )
@@ -1176,7 +1264,7 @@ def build_routers(
         return await _propose(host, ACTION_REALTIME, fields, reason, actor, Risk.MEDIUM)
 
     @manage.post(
-        "/hosts/{host_id}/install",
+        "/hosts/{host_id}/install", dependencies=execute,
         responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
                    for code in (404,)},
     )

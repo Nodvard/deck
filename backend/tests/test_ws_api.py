@@ -63,12 +63,12 @@ async def test_auth_handshake_then_subscribe_and_receive_event(running_app):
         from nodvard_deck.core.events import get_event_bus
         from nodvard_sdk import Event
 
-        await get_event_bus().publish(Event(name="test.thing", payload={"x": 1}))
+        await get_event_bus().publish(Event(name="host.thing", payload={"x": 1}))
 
         event_msg = json.loads(await ws.recv())
         assert event_msg["type"] == "event"
         assert event_msg["channel"] == "events"
-        assert event_msg["payload"]["name"] == "test.thing"
+        assert event_msg["payload"]["name"] == "host.thing"
         assert event_msg["payload"]["data"] == {"x": 1}
 
 
@@ -91,7 +91,7 @@ async def test_unsubscribe_stops_delivery(running_app):
         from nodvard_deck.core.events import get_event_bus
         from nodvard_sdk import Event
 
-        await get_event_bus().publish(Event(name="test.thing2"))
+        await get_event_bus().publish(Event(name="host.thing2"))
 
         # Kein Event mehr faellig -- ein Ping darf noch kommen, aber kein "event".
         await ws.send(json.dumps({"type": "ping"}))
@@ -757,3 +757,57 @@ async def test_token_without_expiry_is_rejected(running_app, db_session, test_se
         with pytest.raises(ConnectionClosed) as exc_info:
             await asyncio.wait_for(ws.recv(), timeout=10)
         assert exc_info.value.rcvd.code == 4401
+
+
+@pytest.mark.asyncio
+async def test_connection_over_the_per_user_limit_is_refused(running_app, monkeypatch):
+    import websockets
+
+    from nodvard_deck.core import ws_hub
+    from nodvard_deck.core.ws_hub import get_ws_hub
+
+    monkeypatch.setattr(ws_hub, "MAX_CONNECTIONS_PER_USER", 2)
+    http_base, ws_base = running_app
+    token = await _bootstrap_owner(http_base)
+
+    async with websockets.connect(f"{ws_base}/api/v1/ws") as first, websockets.connect(f"{ws_base}/api/v1/ws") as second:
+        await _connect_and_subscribe(first, token)
+        await _connect_and_subscribe(second, token)
+        async with websockets.connect(f"{ws_base}/api/v1/ws") as third:
+            await third.send(json.dumps({"type": "auth", "token": token}))
+            code, message = await _expect_end(third)
+        assert code == 4429
+        assert "Zu viele" in message
+        assert get_ws_hub().subscriber_count("events") == 2
+
+        await first.send(json.dumps({"type": "ping"}))
+        assert json.loads(await asyncio.wait_for(first.recv(), timeout=5)) == {"type": "pong"}
+
+    async with websockets.connect(f"{ws_base}/api/v1/ws") as again:
+        await _connect_and_subscribe(again, token)
+
+
+@pytest.mark.asyncio
+async def test_failed_auth_ok_does_not_keep_a_slot(running_app, monkeypatch):
+    import websockets
+    from starlette.websockets import WebSocket
+
+    from nodvard_deck.core.ws_hub import get_ws_hub
+
+    http_base, ws_base = running_app
+    token = await _bootstrap_owner(http_base)
+    real_send = WebSocket.send_json
+
+    async def _send(self, data, *args, **kwargs):
+        if data == {"type": "auth_ok"}:
+            raise RuntimeError("Verbindung weg")
+        return await real_send(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(WebSocket, "send_json", _send)
+    async with websockets.connect(f"{ws_base}/api/v1/ws") as ws:
+        await ws.send(json.dumps({"type": "auth", "token": token}))
+        await _expect_end(ws)
+
+    async with asyncio.timeout(5):
+        while get_ws_hub()._connections:
+            await asyncio.sleep(0.05)

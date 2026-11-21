@@ -1194,6 +1194,38 @@ describe("Erweiterung konfigurieren", () => {
       expect(screen.getByText(/Ein Name kommt mehrfach vor.*Passwort \(b\)/)).toBeInTheDocument();
       expect(screen.getByText(/Beim Speichern werden diese Zugangsdaten gelöscht, danach trägst du sie neu ein: Passwort \(a\)/)).toBeInTheDocument();
     });
+
+    it("sperrt auch beim alten Namen mit Leerzeichen am Rand, dessen Label der Server so meldet", async () => {
+      mockApi({
+        "GET /extensions/proxmox": () => EXT,
+        "GET /extensions/proxmox/settings": () => ({
+          schema: POOL, values: { connections: [device(" nas", "https://a")] }, secrets: [{ ...slot("nas"), label: "pw: nas" }],
+        }),
+      });
+      renderConfig();
+      fireEvent.change(await screen.findByLabelText(/^Adresse/), { target: { value: "https://b" } });
+      expect(screen.getByText(/Beim Speichern werden diese Zugangsdaten gelöscht, danach trägst du sie neu ein: Passwort \(nas\)/)).toBeInTheDocument();
+      fireEvent.click(within(screen.getByTestId("secret-pw: nas")).getByRole("button", { name: "Ersetzen" }));
+      expect(screen.getByText(/Erst die Einstellungen mit der neuen Adresse speichern/)).toBeInTheDocument();
+      expect(within(screen.getByTestId("secret-pw: nas")).getByRole("button", { name: /Ersetzen/ })).toBeDisabled();
+    });
+
+    it("blendet das Geheimnis eines alten Namens mit Leerzeichen nach x-visible-when aus", async () => {
+      const hidden = {
+        ...POOL,
+        properties: { ...POOL.properties, mode: { type: "string", default: "a" } },
+        "x-secrets": [{ ...POOL["x-secrets"][0], "x-visible-when": { mode: "b" } }],
+      };
+      mockApi({
+        "GET /extensions/proxmox": () => EXT,
+        "GET /extensions/proxmox/settings": () => ({
+          schema: hidden, values: { connections: [device(" nas", "https://a")] }, secrets: [{ ...slot("nas"), label: "pw: nas" }],
+        }),
+      });
+      renderConfig();
+      expect(await screen.findByLabelText(/^Adresse/)).toBeInTheDocument();
+      expect(screen.queryByTestId("secret-pw: nas")).not.toBeInTheDocument();
+    });
   });
 
   it("lässt beim ersten Einrichten erst die Adresse speichern, dann die Zugangsdaten eintragen", async () => {

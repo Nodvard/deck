@@ -6,6 +6,7 @@
 import { useEffect, useRef } from "react";
 
 import { useAuthStore } from "../state/auth";
+import { getWsLimitMessage, onWsLimitChange, setWsLimitMessage } from "./wsLimit";
 
 type EventHandler = (payload: unknown) => void;
 
@@ -19,6 +20,9 @@ type ServerMessage =
   | { type: "error"; payload: { title: string } };
 
 const RECONNECT_DELAYS_MS = [500, 1000, 2000, 5000, 10000];
+/** Close-Code des Servers, wenn das Konto schon zu viele Live-Verbindungen offen hat (api/v1/ws.py). */
+export const WS_TOO_MANY_CLOSE_CODE = 4429;
+export const WS_TOO_MANY_MESSAGE = "Zu viele offene Live-Verbindungen für dieses Konto. Schließe nicht benötigte Tabs.";
 
 class WsMultiplexClient {
   private socket: WebSocket | null = null;
@@ -28,9 +32,12 @@ class WsMultiplexClient {
   private handlers = new Map<string, Set<EventHandler>>();
   private desiredChannels = new Set<string>();
   private connectRequested = false;
+  private lastError: string | null = null;
 
   ensureConnected(): void {
     this.connectRequested = true;
+    // Ein neuer Versuch würde wieder abgewiesen; erst `retry()` versucht es erneut.
+    if (getWsLimitMessage() !== null) return;
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -44,6 +51,19 @@ class WsMultiplexClient {
     this.authenticated = false;
     this.socket?.close();
     this.socket = null;
+    setWsLimitMessage(null);
+  }
+
+  /** Klartext, solange der Server die Verbindung wegen zu vieler offener Tabs abweist, sonst `null`. */
+  getLimitMessage = getWsLimitMessage;
+
+  onLimitChange = onWsLimitChange;
+
+  /** Neuer Versuch nach einer Abweisung, etwa nachdem andere Tabs geschlossen wurden. */
+  retry(): void {
+    setWsLimitMessage(null);
+    this.reconnectAttempt = 0;
+    this.ensureConnected();
   }
 
   subscribe(channel: string, handler: EventHandler): () => void {
@@ -74,6 +94,7 @@ class WsMultiplexClient {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(`${protocol}//${window.location.host}/api/v1/ws`);
     this.socket = socket;
+    this.lastError = null;
 
     // Ereignisse einer abgelösten Verbindung zählen nicht mehr: Ein verspätetes `close` öffnete sonst eine weitere,
     // und die aktuelle bliebe unverwaltet offen.
@@ -93,10 +114,14 @@ class WsMultiplexClient {
       this.handleMessage(message);
     });
 
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (ev: CloseEvent) => {
       if (this.socket !== socket) return;
       this.socket = null;
       this.authenticated = false;
+      if (ev.code === WS_TOO_MANY_CLOSE_CODE) {
+        setWsLimitMessage(this.lastError ?? WS_TOO_MANY_MESSAGE);
+        return;
+      }
       if (this.connectRequested) this.scheduleReconnect();
     });
 
@@ -128,9 +153,11 @@ class WsMultiplexClient {
         if (set) for (const handler of set) handler(message.payload);
         break;
       }
+      case "error":
+        this.lastError = typeof message.payload?.title === "string" ? message.payload.title : null;
+        break;
       case "subscribed":
       case "pong":
-      case "error":
         break;
     }
   }

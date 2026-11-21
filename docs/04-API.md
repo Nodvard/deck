@@ -125,7 +125,9 @@ POST /api/v1/auth/mfa            → {mfa_token, code} → wie 200 oben
                                    `code` = 6-stelliger Authenticator-Code ODER ein Wiederherstellungs-Code
                                    (`ABCDE-FGHJK`, Schreibweise egal); Letzterer wird dabei verbraucht.
                                    Falsche Codes zählen gegen das 5er-Limit je `mfa_token`. Ein `mfa_token` gilt
-                                   nur für eine Anmeldung (danach 401), ein Authenticator-Code je Konto nur einmal
+                                   nur für eine Anmeldung (danach 401) und nur, solange das Passwort unverändert
+                                   ist (sonst 401 „Das Passwort wurde inzwischen geändert. …“, kein Code wird
+                                   verbraucht), ein Authenticator-Code je Konto nur einmal
                                    (wiederholt: 401 „Dieser Code wurde schon benutzt. …“). Falsche 6-stellige
                                    Codes zählen außerdem je Konto, egal von welcher IP und zusammen mit den
                                    falschen Codes bei Bestätigungen (Passwort ändern, Zwei-Faktor abschalten,
@@ -169,7 +171,9 @@ PUT/POST/DELETE /api/v1/auth/bootstrap/restore/…, POST /api/v1/auth/bootstrap/
                                    (403 falsch/fehlt, 429 zu oft; gleiche Zähler je IP und über alle Adressen).
 POST /api/v1/auth/refresh        → neuer Access-Token (+ rotierter Refresh-Token; in den 30 s nach
                                    einer Rotation liefert derselbe alte Token nur einen Access-Token,
-                                   ohne Cookie und ohne `refresh_token` im Body);
+                                   ohne Cookie und ohne `refresh_token` im Body; kommt er danach noch
+                                   einmal, auch nach seinem Ablauf, gilt er als Kopie: 401, die
+                                   Anmeldung am Ende seiner Kette endet, Protokoll `auth.refresh_reused`);
                                    429 mit `Retry-After` bei zu vielen Erneuerungen je Konto oder zu vielen
                                    ungültigen Tokens je Adresse (erfolgreiche zählen nur je Konto)
 POST /api/v1/auth/logout         → Refresh-Token widerrufen (bei Web: den des Cookies) und das Cookie löschen
@@ -492,7 +496,9 @@ Löschen betrifft ebenfalls alle und verlangt `notifications.write`: `DELETE /no
 samt ihren Zustellprotokollen (`204`, unbekannte Kennung `404`), `POST /notifications/delete-read` alle gelesenen auf
 einmal (`{"deleted": n}`, ungelesene bleiben, ohne Treffer `0`). Beides steht im Protokoll als `notifications.deleted`
 (`target_type` `notification`): einzeln mit der Kennung als `target_id` und dem `title` in den Einzelheiten, gesammelt
-mit `{"count": n}`; ein Aufruf ohne Treffer schreibt nichts. Gelöscht wird in Häppchen mit Commit dazwischen; scheitert
+mit `{"count": n}`; ein Aufruf ohne Treffer schreibt nichts. Bei Kontomeldungen (`account.*`) stehen dort zusätzlich
+`notification_type` und `account_id`. Wer andere Konten nicht sehen darf, bekommt Kontomeldungen nur zum eigenen Konto,
+ohne den Namen dessen, der sie ausgelöst hat, und im Protokoll keine Titel gelöschter Meldungen zu fremden Konten. Gelöscht wird in Häppchen mit Commit dazwischen; scheitert
 ein späteres Häppchen, steht trotzdem ein Eintrag mit dem bisherigen Stand (`outcome` `failure`,
 `{"count": n, "interrupted": true}`) und der Fehler geht weiter. Ein Versand an die Kanäle, der gerade läuft, wenn seine
 Meldung gelöscht wird, läuft normal zu Ende (nur das Zustellprotokoll entfällt). Außerdem räumt der Kern-Job
@@ -932,7 +938,7 @@ zusätzlich `totp_code`, den aktuellen sechsstelligen Code aus der App (Wiederhe
 | `POST /system/backups/download` | Owner [PW] [2FA] | `{current_password, mode: "schluessel"\|"passwort", password?, totp_code?}` (der Code, weil die Datei alle Schlüssel enthält, auch den der Zwei-Faktor-Anmeldung) → `202` mit Ticket `{ticket, job_id, status, filename, size, error, expires_in, url}`; baut die Datei im Hintergrund (kein Job: dessen Protokoll enthielte die Parameter). `409` bei laufender Sicherung, fehlendem Schlüssel (`schluessel`) oder ohne SQLite-Datei; `507` bei zu wenig Platz |
 | `GET /system/backups/download-jobs/{job_id}` | Owner, nur eigener Download | Stand `building`/`ready`/`failed`, Antwort wie beim Ticket (`404` für fremde, unbekannte oder schon abgeholte Downloads). `job_id` ist eine eigene Zufalls-ID und taugt **nicht** zum Herunterladen: die Oberfläche fragt sie jede Sekunde ab, sie steht also in der Adresse (und im Zugriffsprotokoll), das Ticket nicht |
 | `GET /system/backups/download/{ticket}/status` | Owner, nur eigenes Ticket | **Veraltet** (`deprecated`), bleibt als Übergang: dasselbe über das Ticket in der Adresse. Neu: `download-jobs/{job_id}` |
-| `GET /system/backups/download/{ticket}` | Ticket | Liefert die Datei als normalen Download (Streaming). Gilt **einmal**, 5 Minuten ab Fertigstellung, nur solange der Nutzer noch aktiver Owner ist; sonst `404`, während des Baus `409`. Eine eigens gebaute Datei wird danach gelöscht. Ein Filter am uvicorn-Zugriffsprotokoll (`core/log_filters.py`) ersetzt das Ticket in Adressen unter `…/system/backups/download/` durch `…` |
+| `GET /system/backups/download/{ticket}` | Ticket | Liefert die Datei als normalen Download (Streaming). Gilt **einmal**, 5 Minuten ab Fertigstellung, nur solange der Nutzer noch aktiver Owner ist, die Anmeldung, die das Ticket geholt hat, noch gilt und das Passwort seitdem nicht geändert wurde; sonst `404`, während des Baus `409`. Eine eigens gebaute Datei wird danach gelöscht. Ein Filter am uvicorn-Zugriffsprotokoll (`core/log_filters.py`) ersetzt das Ticket in Adressen unter `…/system/backups/download/` durch `…` |
 | `POST /system/backups/{name}/ticket` | Owner [PW] [2FA] | `{current_password, totp_code?}`: Ticket für eine vorhandene automatische Sicherung (die Datei bleibt liegen) |
 | `POST /system/backups/{name}/verify` | Owner | sha256 der Datei gegen die Prüfsummen-Datei `<name>.json` (ohne Passwort) → `{ok, detail}` |
 | `DELETE /system/backups/{name}` | Owner [PW] | Body `{current_password}`; nur `nodvard-deck-sicherung-*.ndbak` mit eigenem Kopf, die `.json` daneben verschwindet mit → `204`; unbekannt → `404` |
@@ -1219,7 +1225,10 @@ Grenzen: Inhalt höchstens 4 KiB (sonst `413`), Anfragezeile und Kopfzeilen zusa
   Schreibweise derselben Adresse zählt nicht als Änderung. Die Antwort nennt die gelöschten
   Labels in `secrets_cleared` (sonst `[]`, bei `GET` immer `[]`), das Protokoll
   `extension.settings` zusätzlich zu `changed` in `detail.secrets_cleared` (nur wenn etwas
-  gelöscht wurde).
+  gelöscht wurde). Bleibt ein gespeichertes Geheimnis stehen, prüft sein Ziel das Zertifikat danach aber schwächer
+  (`tls_insecure_skip_verify` geht an, oder `tls_fingerprint_sha256` bekommt einen anderen Wert oder fällt weg,
+  solange die Prüfung vorher an war; ein gesetzter Fingerabdruck geht vor dem Schalter), verlangt der Kern ebenso `current_password`/`totp_code` (sonst `403 confirm_required`); das Geheimnis
+  bleibt, das Protokoll nennt es in `detail.tls_weakened`.
   Felder mit `x-widget: "schedule"` müssen ein gültiger Cron-Ausdruck sein (fünf Angaben, dieselbe Prüfung wie beim
   Anmelden des Jobs); sonst `422` „„<Feldtitel>“: Der Zeitplan „…“ ist ungültig. Erlaubt sind fünf Angaben: …“, und
   nichts wird gespeichert. Leer oder `null` bleibt erlaubt (dann gilt der Standard der Erweiterung).
@@ -1239,13 +1248,19 @@ Grenzen: Inhalt höchstens 4 KiB (sonst `413`), Anfragezeile und Kopfzeilen zusa
 - Das alte `POST /ext/proxmox|backups/connections/{name}/token` legt ein Token nur an
   (`409`, wenn schon eines existiert oder der Name mehrfach vorkommt). Zum Setzen **und Ersetzen** dient
   `PUT /extensions/{id}/secrets` mit `{label: "proxmox-token:<name>", value}`; die Oberfläche
-  nutzt nur noch diesen Weg. Das Token der Verbindung löschen die Routen der beiden Erweiterungen selbst:
-  `POST /ext/proxmox|backups/connections` ein altes unter demselben Namen, `PUT …/connections/{name}` eines, wenn
-  `base_url` auf ein anderes Ziel zeigt (Vergleich mit `nodvard_sdk.same_target`, eine andere Schreibweise derselben
-  Adresse zählt nicht), und `DELETE …/connections/{name}` das der entfernten Verbindung. Gab es eines, steht
-  `extension.secret_removed` im Protokoll. Ein Geheimnis unter dem Namen, das nicht von der Erweiterung stammt (etwa
-  über `POST /secrets` angelegt), bleibt immer unverändert: `POST` und `PUT` antworten dann `409` mit einem Satz, der
-  das Geheimnis nennt, bevor sich etwas ändert; `DELETE` entfernt die Verbindung und lässt das Geheimnis stehen.
+  nutzt nur noch diesen Weg. Geändertes Verhalten (früher löschten die Routen das Token selbst): Ein hinterlegtes
+  Token löschen oder schwächen die Routen der beiden Erweiterungen nie,
+  das geht nur über den Kern mit Passwort: `POST /ext/proxmox|backups/connections` mit einem Token unter demselben
+  Namen, `PUT …/connections/{name}` mit `base_url` auf ein anderes Ziel (Vergleich mit `nodvard_sdk.same_target`, eine
+  andere Schreibweise derselben Adresse zählt nicht) oder mit schwächerer Zertifikatsprüfung (wie oben bei
+  `PUT /extensions/{id}/settings`) antworten dann `409` mit einem Satz, der das Geheimnis nennt, und ändern nichts.
+  Ohne Token geht beides wie bisher. `DELETE …/connections/{name}` entfernt die Verbindung und lässt ein Token stehen;
+  die Oberfläche löscht es vorher über `DELETE /extensions/{id}/secrets` (mit Passwort). Das gilt auch für ein
+  Geheimnis, das nicht von der Erweiterung stammt (etwa über `POST /secrets` angelegt). Bleibt nach `DELETE` ein Token
+  unter dem Namen liegen, nennt das `409` von `POST` den Weg: die Verbindung im Einstellungsformular anlegen (dort fällt
+  es nach Rückfrage weg) oder einen anderen Namen wählen. Ausgenommen sind „Mit Passwort verbinden“ und die Übernahme
+  in Proxmox-Backups: Sie ersetzen bzw. räumen ein Token weiter selbst, verlangen dafür aber das Passwort des
+  Proxmox-Servers und legen das neue Token dort frisch an.
   Allgemein antwortet eine Erweiterungs-Route, die ein fremdes Geheimnis ersetzen oder löschen wollte
   (`SecretNotOwned`), mit `409` und einem Satz dazu, nicht mit `500`.
 - **Fingerabdruck des Zertifikats** (`proxmox` und `backups`, ergänzt): Die Verbindungs-Routen nehmen zusätzlich
@@ -1264,7 +1279,14 @@ Grenzen: Inhalt höchstens 4 KiB (sonst `413`), Anfragezeile und Kopfzeilen zusa
   `GET` liest nur das Zertifikat (TLS-Handshake, nichts wird gesendet): `sha256` zeigt der Server jetzt, `stored` ist
   der gemerkte Fingerabdruck, `matches` ob beide gleich sind. `POST` liest es erneut und speichert nur, wenn `sha256`
   genau dem entspricht, was der Server in diesem Moment zeigt; sonst `409 {detail, code: "certificate_mismatch",
-  sha256}` mit dem aktuellen Wert. Dabei geht `tls_insecure_skip_verify` aus; Protokoll
+  sha256}` mit dem aktuellen Wert. Ist ein Token hinterlegt und würde die Prüfung schwächer, kommt
+  `409 {detail, code: "stored_secret"}` und nichts ändert sich; die Oberfläche merkt den Fingerabdruck dann über
+  `PUT /extensions/{id}/settings/fingerprint` `{connection, sha256}` mit Passwort (`extensions.manage`). Der Kern
+  ändert dort unter der Einstellungssperre nur den Fingerabdruck dieses Eintrags und schaltet bei ihm
+  `tls_insecure_skip_verify` aus; andere Verbindungen und Felder bleiben, wie sie gespeichert sind, und werden nicht
+  neu geprüft. Fragt nur, wenn ein Token hinterlegt ist und die Prüfung damit ein neues Zertifikat annimmt (sonst wie
+  `PUT /extensions/{id}/settings`, Protokoll `extension.settings`); `400` kein Fingerabdruck, `404` unbekannter
+  Eintrag, `409` Modul ohne Fingerabdruck. Dabei geht `tls_insecure_skip_verify` aus; Protokoll
   `proxmox.certificate_confirmed` bzw. `backups.certificate_confirmed` mit Verbindung, Adresse, altem und neuem
   Fingerabdruck. Beide brauchen `secrets.write`. `400` kein Fingerabdruck, `404` unbekannte Verbindung, `502` Server
   nicht erreichbar. Eine Verbindung mit gemerktem Fingerabdruck, deren Server ein anderes Zertifikat zeigt, meldet im
@@ -1342,7 +1364,12 @@ auch ältere Einträge, die noch Ausgabe enthalten: Bei `action.executed` behäl
 nur die genannten Werte, alle anderen Felder sind leer (`output` und `error` stehen immer als
 `null` darin, `detail` als `{}`); in allen Einträgen werden Felder `output`, `stdout`, `stderr`
 und `command` (auch verschachtelt) zu `null`, denn ein Befehl kann wie der `payload` einer Aktion Zugangsdaten
-enthalten. Wurde dabei etwas entfernt, setzt `GET /audit`
+enthalten. Sonstiger Text in `detail` bleibt nur unter Schlüsseln einer Erlaubnisliste (Kennungen, Namen, feste
+Zustände wie `host_id`, `job_id`, `status`, `rule`, `gate_error`, `key`) und mit höchstens 200 Zeichen, jeder andere Text wird
+zu `null`; Zahlen, Ja/Nein und leere Werte bleiben. Unter `reason`, `result`, `source`, `aktion` und `change` bleiben nur
+kurze Codes wie `renewed` oder `ok` (Kleinbuchstaben, Ziffern, `_.:-`), unter `task_status` nur feste Zustände wie
+`OK`, `failed` oder `timeout`. `title` bleibt nur bei `notifications.deleted`. `reason` bleibt nur bei Einträgen, die allein der Kern schreibt
+(`auth.*`, `login.*`, `mfa.*`, `user.*`), sonst ist es `null`. Wurde dabei etwas entfernt, setzt `GET /audit`
 `output_hidden: true`; der Export hat dieses Feld nicht.
 
 **Namen statt Kennungen.** Die `action`-Ressource trägt neben den rohen
@@ -1402,7 +1429,7 @@ zusätzlich `standing_approval` (lief ohne Klick) und `reason`.
 ### Update-Vorschläge für viele Server und Härtungs-Audit (Erweiterung `shield`)
 
 ```
-POST /ext/shield/defender/updates/propose-all   → 200 {mode, results[], counts}   Recht: soc.manage
+POST /ext/shield/defender/updates/propose-all   → 200 {mode, results[], counts}   Recht: soc.manage und hosts.execute
 POST /ext/shield/defender/audits                → 200 {hosts, started, running, audits}   Recht: soc.manage
 ```
 
@@ -1627,7 +1654,10 @@ GET  /ext/backups/restore/backups?connection=&vmid=&kind=   → 200 {vmid, name,
 GET  /ext/backups/restore/options?connection=&volid=        → 200 {kind, nodes[], suggested_vmid, suggested_name, blocked, refuse, warnings[], …}   Recht: hosts.execute
 POST /ext/backups/restore                                   → 200 {action_id, status, risk, warnings[]}   Recht: hosts.execute
 GET  /ext/backups/jobs/{job_ref}/failure?upid=              → 200 {upid, node, status, key, what, todo, detail, …}   Recht: hosts.read
+POST /ext/backups/jobs/{job_ref}/retry                      → 200 {action_id, status, risk}   Recht: hosts.execute
 ```
+
+**Neuversuch.** `POST /ext/backups/jobs/{job_ref}/retry` schlägt eine Sicherung genau dieses Gastes mit den Einstellungen des Jobs vor. `400`, wenn der Job den Gast nicht (mehr) sichert, `404` bei unbekannter Kennung, `409` bei mehrdeutiger alter Kennung, wenn Proxmox den Job nicht liefert oder bei zu wenig Platz (`space_warning`, dann erneut mit `ignore_space: true`).
 
 **Wiederherstellen als Kopie.** Legt aus einer Proxmox-Sicherung einen **neuen** Gast (VM oder Container) an. Das Original
 wird nie angefasst und nie überschrieben. Die Kopie bekommt eine neue Nummer und neue MAC-Adressen und entsteht im festen
@@ -1762,7 +1792,7 @@ den Aktionsweg des Servers: `POST /hosts/{docker_host_id}/actions/container.star
 
 ```
 GET  /ext/shield/defender/realtime/readiness?refresh=   → 200 {hosts[]}                       Recht: soc.read
-POST /ext/shield/defender/realtime/{host_id}            → 200 {action_id, status, risk}      Recht: soc.manage
+POST /ext/shield/defender/realtime/{host_id}            → 200 {action_id, status, risk}      Recht: soc.manage und hosts.execute
 ```
 
 Ohne Echtzeit prüft der Viren-Wächter im Minuten-Takt die zuletzt geänderten Dateien. In Echtzeit meldet clamonacc
@@ -2120,7 +2150,15 @@ Die SFTP-Quellen der Server (terminal-Extension) schreiben bei `upload` und `/fi
 Temp-Datei im Zielordner (`.<name>.nodvard-tmp-…`) und ersetzen das Ziel erst, wenn alles angekommen ist. Ein
 abgebrochener Upload oder Transfer lässt die vorhandene Datei dann unberührt. Ersetzt die Temp-Datei eine
 bestehende Datei, ist sie bis zum Ende nur für ihren Besitzer lesbar (`0600`); die neue Datei behält Besitzer,
-Gruppe und Rechte der alten. Ein Link wird bis zur echten Datei verfolgt und bleibt ein Link. Direkt ins Ziel
+Gruppe und Rechte der alten. Ein Link wird bis zur echten Datei verfolgt und bleibt ein Link. Vertraut wird dabei
+nur root und dem Konto, mit dem Deck angemeldet ist (erkannt am Besitzer einer kurz angelegten Probedatei
+`.nodvard-konto-…` in `/tmp` oder im Startordner; lässt sich keine anlegen, gilt nur root): Jeder Link im Pfad
+und jeder Ordner bis zum Ziel muss einem der beiden gehören, und kein anderes Konto darf einen Ordner auf dem Weg
+oder das Ziel austauschen können (für andere beschreibbar nur mit Sticky-Bit und eigenem Eintrag). Geprüft wird
+von `/` aus Teil für Teil, jeder Ordner vor dem Lesen seiner Einträge, auch einer, den ein `..` wieder verlässt;
+geschrieben wird nur auf den so aufgelösten Pfad. Zeigt der
+Server ein Linkziel nicht Schritt für Schritt (`readlink`), wird dem Link nicht gefolgt. Sonst lehnt der Upload
+mit einer Meldung ab; als root angemeldet heißt das etwa: kein Upload in Ordner anderer Benutzer. Direkt ins Ziel
 geschrieben wird, wenn der Zugang im Zielordner nichts anlegen darf oder den Besitzer der alten Datei nicht
 übernehmen kann (etwa ohne root bei einer fremden Datei). Dann liest Nodvard Deck erst die ganze Quelle (über
 8 MiB in eine lokale Temp-Datei), bevor es das Ziel öffnet: bricht die Quelle ab, bleibt das Ziel unberührt,
@@ -2186,7 +2224,8 @@ Akkulaufzeit — deshalb bewusst nicht ein Socket pro Feature.
 Authentifizierung: erste Nachricht nach dem Verbinden ist
 `{"type":"auth","token":"<access_token>"}`. Keine Tokens in der URL (sie landen in
 Proxy-Logs). Der Token einer schon beendeten Anmeldung (abgemeldet, widerrufen) bekommt
-`auth_error`, auch solange er noch nicht abgelaufen ist.
+`auth_error`, auch solange er noch nicht abgelaufen ist. Ein Konto hat höchstens 20 offene Verbindungen; eine weitere
+bekommt statt `auth_ok` ein `error` mit dem Grund, danach schließt der Server mit Code `4429`. Ein Client sollte darauf nicht von selbst neu verbinden; die Oberfläche zeigt dann einen Hinweis mit „Erneut verbinden“. Ob ein Ereignis eine Verbindung erreicht und in welcher Fassung, entscheidet der Hub erst unmittelbar vor dem Senden.
 
 Eine offene Verbindung wird bei jedem `ping` (alle 30 s) erneut geprüft: Ist das Konto
 deaktiviert, das Passwort geändert oder die Anmeldung beendet, kommt ein `error` mit dem
@@ -2215,7 +2254,7 @@ Umschlag, in beide Richtungen:
 Kanäle:
 
 ```
-events                     alles, was der Event-Bus publiziert (gefiltert nach RBAC)
+events                     Ereignisse des Event-Busses mit zugeordnetem Präfix (gefiltert nach RBAC)
 notifications              neue Benachrichtigungen
 actions                    Vorschlag angelegt / bestätigt / ausgeführt
 hosts                      Statuswechsel
@@ -2224,6 +2263,17 @@ runs.{run_id}              Live-Ausgabe eines Laufs
 files.transfer.{id}        Fortschritt
 ext.{ext_id}.{beliebig}    Extension-eigene Kanäle (ctx.ws.broadcast)
 ```
+
+Wer was bekommt:
+
+- `events` liefert nur Ereignisse mit den Präfixen `host`, `action` (beide `hosts.read`), `job` (`jobs.read`),
+  `notification` (`notifications.read`), `audit` (`audit.read`) und `extension` (jedes angemeldete Konto). Andere
+  Präfixe, etwa `system.*` oder Ereignisse von Modulen, gehen nicht über WebSocket; Handler im Prozess bekommen sie
+  weiter.
+- `ext.{ext_id}.*` geht an Konten, die alle Rechte mindestens einer Kachel dieses Moduls haben, deren
+  `refresh.ws_channel` der Kanal ist (heutige oder alte Kennung). Ohne solche Kachel nur an Konten mit `*`.
+- `notifications`: Kontomeldungen (`notification_type` beginnt mit `account.`) gehen nur an das Konto aus `account_id`
+  und an Leser, die andere Konten sehen dürfen (`users.read` oder ein `actions.approve`-Recht), wie in der Liste.
 
 `action.*`-Ereignisse im Kanal `events` (Recht `hosts.read`, z. B. `action.executed`) enthalten den `payload` der
 Aktion (im Umschlag unter `payload.data.payload`) vollständig nur für Verbindungen mit `hosts.execute`;
@@ -2492,8 +2542,8 @@ Die folgenden Routen bleiben für externe Clients und als SDK-Beispiele erhalten
 stehen auch an den Handlern beziehungsweise den Alias-Angaben der Erweiterungen.
 
 Die Alias-Zeilen umfassen sämtliche Methode-Pfad-Paare unter dem jeweiligen Präfix.
-Der aktuelle Schnappschuss `backend/tests/contract/api_v1.json` enthält dort 61 Docker-, 49 Shield- und
-9 Netzwerk-Routen. Zusammen mit den elf Einzelrouten sind das 130 Vertragsrouten. Der Suchbericht
+Der aktuelle Schnappschuss `backend/tests/contract/api_v1.json` enthält dort 61 Docker-, 51 Shield- und
+9 Netzwerk-Routen. Zusammen mit den elf Einzelrouten sind das 132 Vertragsrouten. Der Suchbericht
 vom 2. November 2026 zählte noch 112. Externe Nutzung lässt sich aus den lokalen Aufrufern nicht ableiten.
 
 **Entfernt:** keine. Die bereits veralteten Adressen bleiben in 1.x erhalten und können frühestens

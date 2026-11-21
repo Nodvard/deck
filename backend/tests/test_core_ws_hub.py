@@ -168,3 +168,176 @@ async def test_a_hanging_socket_is_dropped_and_others_still_receive(monkeypatch)
     assert healthy.sent == [{"type": "event", "channel": "jobs.j1", "payload": {"n": 1}}]
     assert hanging.closed
     assert hub.subscriber_count("jobs.j1") == 1
+
+
+@pytest.mark.asyncio
+async def test_healthy_socket_receives_while_another_one_hangs(monkeypatch):
+    monkeypatch.setattr(ws_hub, "SEND_TIMEOUT_S", 3.0)
+    hub = WsHub()
+    hanging = _HangingSocket()
+    healthy = _FakeSocket()
+    hub.subscribe(hub.connect(hanging, user_id="u1"), "jobs.j1")
+    hub.subscribe(hub.connect(healthy, user_id="u2"), "jobs.j1")
+
+    publishing = asyncio.ensure_future(hub.publish("jobs.j1", {"n": 1}))
+    try:
+        async with asyncio.timeout(0.5):
+            while not healthy.sent:
+                await asyncio.sleep(0.01)
+    finally:
+        await publishing
+
+    assert healthy.sent == [{"type": "event", "channel": "jobs.j1", "payload": {"n": 1}}]
+
+
+@pytest.mark.asyncio
+async def test_many_hanging_sockets_cost_one_timeout_not_one_each(monkeypatch):
+    monkeypatch.setattr(ws_hub, "SEND_TIMEOUT_S", 0.2)
+    hub = WsHub()
+    sockets = [_HangingSocket() for _ in range(6)]
+    for i, sock in enumerate(sockets):
+        hub.subscribe(hub.connect(sock, user_id=f"u{i}"), "events")
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await hub.publish("events", {"n": 1})
+
+    assert loop.time() - started < 0.6
+    assert all(sock.closed for sock in sockets)
+    assert hub.subscriber_count("events") == 0
+
+
+def test_connections_per_user_are_capped():
+    hub = WsHub()
+    ids = [hub.connect(_FakeSocket(), user_id="u1") for _ in range(ws_hub.MAX_CONNECTIONS_PER_USER)]
+
+    with pytest.raises(ws_hub.ConnectionLimitReached):
+        hub.connect(_FakeSocket(), user_id="u1")
+    hub.connect(_FakeSocket(), user_id="u2")
+
+    hub.disconnect(ids[0])
+    hub.connect(_FakeSocket(), user_id="u1")
+
+
+@pytest.mark.asyncio
+async def test_rejected_connection_is_not_registered():
+    hub = WsHub()
+    for _ in range(ws_hub.MAX_CONNECTIONS_PER_USER):
+        hub.subscribe(hub.connect(_FakeSocket(), user_id="u1"), "events")
+    extra = _FakeSocket()
+    with pytest.raises(ws_hub.ConnectionLimitReached):
+        hub.connect(extra, user_id="u1")
+
+    await hub.publish("events", {"n": 1})
+
+    assert extra.sent == []
+    assert hub.subscriber_count("events") == ws_hub.MAX_CONNECTIONS_PER_USER
+
+
+async def _publish_with_change_before_delivery(hub: WsHub, change, *args, **kwargs) -> None:
+    """Startet `publish`, ändert den Hub, nachdem die Empfänger geplant sind, und wartet die Zustellung ab."""
+    task = asyncio.create_task(hub.publish(*args, **kwargs))
+    await asyncio.sleep(0)
+    assert not task.done()
+    change()
+    await task
+
+
+_ACTION = {"id": "a1", "output": "geheim"}
+_ACTION_REDUCED = {"id": "a1"}
+
+
+@pytest.mark.asyncio
+async def test_permission_lost_before_delivery_sends_reduced_payload():
+    hub = WsHub()
+    sock = _FakeSocket()
+    conn = hub.connect(sock, user_id="u1", permissions=["actions.read", "hosts.execute"])
+    hub.subscribe(conn, "actions")
+
+    await _publish_with_change_before_delivery(
+        hub,
+        lambda: hub.set_permissions(conn, ["actions.read"]),
+        "actions",
+        _ACTION,
+        required_permission="actions.read",
+        reduced_payload=_ACTION_REDUCED,
+        full_permission="hosts.execute",
+    )
+
+    assert [m["payload"] for m in sock.sent] == [_ACTION_REDUCED]
+
+
+@pytest.mark.asyncio
+async def test_required_permission_lost_before_delivery_sends_nothing():
+    hub = WsHub()
+    sock = _FakeSocket()
+    conn = hub.connect(sock, user_id="u1", permissions=["actions.read"])
+    hub.subscribe(conn, "actions")
+
+    await _publish_with_change_before_delivery(
+        hub, lambda: hub.set_permissions(conn, []), "actions", _ACTION, required_permission="actions.read"
+    )
+
+    assert sock.sent == []
+
+
+@pytest.mark.asyncio
+async def test_audience_lost_before_delivery_sends_nothing():
+    hub = WsHub()
+    sock = _FakeSocket()
+    conn = hub.connect(sock, user_id="u1", permissions=["soc.read"])
+    hub.subscribe(conn, "ext.shield")
+
+    await _publish_with_change_before_delivery(
+        hub,
+        lambda: hub.set_permissions(conn, []),
+        "ext.shield",
+        {"n": 1},
+        audience=lambda _user_id, permissions: "soc.read" in permissions,
+    )
+
+    assert sock.sent == []
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_before_delivery_sends_nothing():
+    hub = WsHub()
+    sock = _FakeSocket()
+    conn = hub.connect(sock, user_id="u1")
+    hub.subscribe(conn, "hosts")
+
+    await _publish_with_change_before_delivery(hub, lambda: hub.unsubscribe(conn, "hosts"), "hosts", {"n": 1})
+
+    assert sock.sent == []
+
+
+@pytest.mark.asyncio
+async def test_disconnect_before_delivery_sends_nothing():
+    hub = WsHub()
+    sock = _FakeSocket()
+    conn = hub.connect(sock, user_id="u1")
+    hub.subscribe(conn, "hosts")
+
+    await _publish_with_change_before_delivery(hub, lambda: hub.disconnect(conn), "hosts", {"n": 1})
+
+    assert sock.sent == []
+
+
+@pytest.mark.asyncio
+async def test_permission_gained_before_delivery_sends_full_payload():
+    hub = WsHub()
+    sock = _FakeSocket()
+    conn = hub.connect(sock, user_id="u1", permissions=["actions.read"])
+    hub.subscribe(conn, "actions")
+
+    await _publish_with_change_before_delivery(
+        hub,
+        lambda: hub.set_permissions(conn, ["actions.read", "hosts.execute"]),
+        "actions",
+        _ACTION,
+        required_permission="actions.read",
+        reduced_payload=_ACTION_REDUCED,
+        full_permission="hosts.execute",
+    )
+
+    assert [m["payload"] for m in sock.sent] == [_ACTION]

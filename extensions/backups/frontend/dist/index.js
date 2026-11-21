@@ -231,6 +231,32 @@ async function settleAction(proposal, options = {}) {
 // ../../_shared/frontend/src/certificate.tsx
 import { useEffect, useState } from "react";
 
+// ../../_shared/frontend/src/connectionToken.ts
+var STORED_SECRET_CODE = "stored_secret";
+async function failIfNotOk(res) {
+  if (res.ok) return;
+  const body = await res.json().catch(() => ({}));
+  throw new Error(errorFromBody(body, res.status));
+}
+async function dropConnectionToken(extId, label) {
+  const res = await authedFetchConfirmed(
+    `/extensions/${extId}/secrets?label=${encodeURIComponent(label)}`,
+    (confirmation) => ({ method: "DELETE", body: JSON.stringify(confirmation ?? {}) })
+  );
+  if (res === null) return false;
+  await failIfNotOk(res);
+  return true;
+}
+async function pinInSettings(extId, connection, sha256) {
+  const res = await authedFetchConfirmed(`/extensions/${extId}/settings/fingerprint`, (confirmation) => ({
+    method: "PUT",
+    body: JSON.stringify({ connection, sha256, ...confirmation })
+  }));
+  if (res === null) return false;
+  await failIfNotOk(res);
+  return true;
+}
+
 // ../../_shared/frontend/src/ui.tsx
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 var inputClass = "w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-[var(--color-accent)] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] disabled:opacity-50";
@@ -409,8 +435,16 @@ function ConnectionCertificate({
         setConfirmed(false);
         throw new Error(errorFromBody(body, res.status));
       }
-      if (!res.ok) throw new Error(errorFromBody(body, res.status));
-      setInfo(body);
+      if (res.status === 409 && body.code === STORED_SECRET_CODE) {
+        if (!await pinInSettings(extId, connection, info.sha256)) return;
+        const fresh = await authedFetch(path);
+        const freshBody = await fresh.json().catch(() => ({}));
+        if (!fresh.ok) throw new Error(errorFromBody(freshBody, fresh.status));
+        setInfo(freshBody);
+      } else {
+        if (!res.ok) throw new Error(errorFromBody(body, res.status));
+        setInfo(body);
+      }
       setConfirmed(false);
       setMessage("Gemerkt. Nodvard Deck spricht jetzt nur mit dem Server, der genau dieses Zertifikat zeigt.");
       onSaved?.();
@@ -870,6 +904,9 @@ function RestoreCopyPanel({ target, onDone }) {
 
 // src/BackupsPage.tsx
 import { Fragment as Fragment5, jsx as jsx6, jsxs as jsxs6 } from "react/jsx-runtime";
+function jobIdOf(job) {
+  return job.job_id ?? job.job_ref.split("--")[1] ?? "";
+}
 function formatSize(bytes) {
   if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1).replace(/\.0$/, "")} TB`;
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1).replace(/\.0$/, "")} GB`;
@@ -1190,7 +1227,7 @@ function ConnectionsPanel() {
     setPending(`toggle:${conn.name}`);
     setMessage(null);
     try {
-      const res = await authedFetch(`/ext/backups/connections/${conn.name}`, {
+      const res = await authedFetch(`/ext/backups/connections/${encodeURIComponent(conn.name)}`, {
         method: "PUT",
         body: JSON.stringify({ enabled: !conn.enabled })
       });
@@ -1213,15 +1250,20 @@ function ConnectionsPanel() {
     if (!ok) return;
     setPending(`remove:${name}`);
     setMessage(null);
+    let tokenGone = false;
     try {
-      const res = await authedFetch(`/ext/backups/connections/${name}`, { method: "DELETE" });
+      if (!await dropConnectionToken("backups", `backups-token:${name}`)) return;
+      tokenGone = true;
+      const res = await authedFetch(`/ext/backups/connections/${encodeURIComponent(name)}`, { method: "DELETE" });
       if (!res.ok && res.status !== 204) {
         const body = await res.json().catch(() => ({}));
         throw new Error(errorFromBody(body, res.status));
       }
       load();
     } catch (err) {
-      setMessage(`Fehler: ${err instanceof Error ? err.message : String(err)}`);
+      const reason = err instanceof Error ? err.message : String(err);
+      setMessage(tokenGone ? `Das Token ist gel\xF6scht, die Verbindung aber noch da: ${reason}` : `Fehler: ${reason}`);
+      if (tokenGone) load();
     } finally {
       setPending(null);
     }
@@ -1668,7 +1710,7 @@ function BackupsPage() {
           JobEditForm,
           {
             job,
-            guests: (jobs ?? []).filter((j) => j.connection === job.connection && j.job_ref.split("--")[1] === job.job_ref.split("--")[1]).map((j) => j.name),
+            guests: (jobs ?? []).filter((j) => j.connection === job.connection && jobIdOf(j) === jobIdOf(job)).map((j) => j.name),
             onDone: (text) => {
               setEditing(null);
               if (text) {

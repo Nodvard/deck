@@ -21,6 +21,7 @@ import { Button, EmptyState } from "../../../_shared/frontend/src/ui";
 import { FOCUS_CLASS, deck } from "../../../_shared/frontend/src/deck";
 
 import { CertificateStatus, ConnectionCertificate } from "../../../_shared/frontend/src/certificate";
+import { dropConnectionToken } from "../../../_shared/frontend/src/connectionToken";
 
 import { OldTokens } from "./OldTokens";
 import { ProxmoxConnect } from "./ProxmoxConnect";
@@ -170,6 +171,7 @@ interface StoragePool {
   type: string;
   content_labels: string[];
   shared: boolean;
+  active: boolean;
   total: number | null;
   used: number | null;
   used_percent: number | null;
@@ -432,13 +434,17 @@ function StorageSection({ pools, focusNode = null }: { pools: StoragePool[]; foc
                 )}
               </td>
               <td data-label="Belegung" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 align-top text-xs`}>
-                <div className="h-1.5 w-full overflow-hidden rounded bg-white/10" role="progressbar" aria-valuenow={pool.used_percent ?? 0} aria-valuemin={0} aria-valuemax={100}>
-                  <div className={`h-full ${BAR_TONE[pool.tone] ?? BAR_TONE.neutral}`} ref={styleRef({ width: `${Math.min(100, pool.used_percent ?? 0)}%` })} />
-                </div>
-                <span className="opacity-70">
-                  {formatBytes(pool.used ?? 0)} / {formatBytes(pool.total ?? 0)}
-                  {pool.used_percent != null ? ` (${pool.used_percent} %)` : ""}
-                </span>
+                {pool.active === false ? <span className="text-red-300">nicht erreichbar</span> : (
+                  <>
+                    <div className="h-1.5 w-full overflow-hidden rounded bg-white/10" role="progressbar" aria-valuenow={pool.used_percent ?? 0} aria-valuemin={0} aria-valuemax={100}>
+                      <div className={`h-full ${BAR_TONE[pool.tone] ?? BAR_TONE.neutral}`} ref={styleRef({ width: `${Math.min(100, pool.used_percent ?? 0)}%` })} />
+                    </div>
+                    <span className="opacity-70">
+                      {formatBytes(pool.used ?? 0)} / {formatBytes(pool.total ?? 0)}
+                      {pool.used_percent != null ? ` (${pool.used_percent} %)` : ""}
+                    </span>
+                  </>
+                )}
               </td>
             </tr>
           ))}
@@ -1208,7 +1214,7 @@ function ConnectionsPanel({
     setPending(`toggle:${conn.name}`);
     setMessage(null);
     try {
-      const res = await authedFetch(`/ext/proxmox/connections/${conn.name}`, {
+      const res = await authedFetch(`/ext/proxmox/connections/${encodeURIComponent(conn.name)}`, {
         method: "PUT", body: JSON.stringify({ enabled: !conn.enabled }),
       });
       if (!res.ok) {
@@ -1231,15 +1237,21 @@ function ConnectionsPanel({
     if (!ok) return;
     setPending(`remove:${name}`);
     setMessage(null);
+    let tokenGone = false;
     try {
-      const res = await authedFetch(`/ext/proxmox/connections/${name}`, { method: "DELETE" });
+      // Das Token löscht nur der Kern, mit Passwort; erst danach geht die Verbindung.
+      if (!(await dropConnectionToken("proxmox", `proxmox-token:${name}`))) return;
+      tokenGone = true;
+      const res = await authedFetch(`/ext/proxmox/connections/${encodeURIComponent(name)}`, { method: "DELETE" });
       if (!res.ok && res.status !== 204) {
         const body = await res.json().catch(() => ({}));
         throw new Error(errorFromBody(body, res.status));
       }
       load();
     } catch (err) {
-      setMessage(`Fehler: ${err instanceof Error ? err.message : String(err)}`);
+      const reason = err instanceof Error ? err.message : String(err);
+      setMessage(tokenGone ? `Das Token ist gelöscht, die Verbindung aber noch da: ${reason}` : `Fehler: ${reason}`);
+      if (tokenGone) load();
     } finally {
       setPending(null);
     }
@@ -2097,7 +2109,7 @@ function Summary({ nodes, guests, connections, updates, pools, updatesIncomplete
     // Ein Speicher, den Proxmox als nicht aktiv meldet, hat keine Belegung -- er wiegt schwerer als jeder volle.
     const unavailable = pools.find((p) => p.used_percent == null && p.tone === "danger");
     storageTile = unavailable
-      ? { value: "!", hint: `${unavailable.storage}${unavailable.shared ? "" : ` (${unavailable.node})`} nicht verfügbar`, tone: "bad" }
+      ? { value: "!", hint: `${unavailable.storage}${unavailable.shared ? "" : ` (${unavailable.node})`} nicht erreichbar`, tone: "bad" }
       : fullest
       ? {
           value: `${Math.round(fullest.used_percent ?? 0)} %`,

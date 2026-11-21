@@ -32,10 +32,14 @@ def _json_pattern(regex: re.Pattern[str]) -> str:
     return regex.pattern.replace("\\Z", "$")
 
 
+SELF_STOP_REFUSED = (
+    "'{name}' ist der Container, in dem Nodvard Deck selbst läuft -- Stoppen würde diese Oberfläche abschalten. "
+    "Neustarten geht, Stoppen nur direkt auf dem Host."
+)
 COMPOSE_DIRS_TTL_S = 600.0
 """So lange gilt der gemerkte Stand der Projektordner eines Hosts, bevor die Orte ihn neu lesen."""
 MAX_COMPOSE_DIRS = 20
-_PORTAINER_DIR_PREFIX = "/data/compose/"
+_PORTAINER_DIR_RE = re.compile(r"^/data/compose/(?:[0-9]{1,9}(?:/|\Z)|\Z)")
 """Portainer legt seine Stacks in seinem Container unter `/data/compose/<n>` ab; diesen Ordner gibt es auf dem Host nicht."""
 
 
@@ -50,7 +54,7 @@ def parse_compose_dirs(text: str) -> dict[str, str]:
         if len(parts) < 8:
             continue
         project, folder = parts[5].strip(), parts[7].strip()
-        if not project or project in dirs or not folder.startswith("/") or folder.startswith(_PORTAINER_DIR_PREFIX):
+        if not project or project in dirs or not folder.startswith("/") or _PORTAINER_DIR_RE.match(folder):
             continue
         if any(unicodedata.category(ch) == "Cc" for ch in folder) or ".." in folder.split("/"):
             continue
@@ -842,6 +846,25 @@ class DockerContainerExecutor:
     def __init__(self, ctx: "ExtensionContext") -> None:
         self._ctx = ctx
 
+    async def _self_stop_refusal(self, host: Any, name: str) -> str | None:
+        """Der Grund, `name` nicht zu stoppen: Es ist Nodvard Deck selbst, oder das ließ sich nicht prüfen."""
+        from .image_apply import is_self_image
+
+        unchecked = f"Ob '{name}' Nodvard Deck selbst ist, ließ sich nicht prüfen; gestoppt wurde nichts."
+        found = await self._ctx.exec.run(host, commands.container_id(name), timeout_s=15)
+        if found.exit_code != 0:
+            return unchecked
+        if is_own_container(found.stdout.strip()):
+            return SELF_STOP_REFUSED.format(name=name)
+        details = await self._ctx.exec.run(host, commands.inspect_container(name), timeout_s=15)
+        if details.exit_code != 0:
+            return unchecked
+        try:
+            image = str(json.loads(details.stdout)[0]["Config"]["Image"])
+        except (ValueError, LookupError, TypeError):
+            return unchecked
+        return SELF_STOP_REFUSED.format(name=name) if is_self_image(image) else None
+
     async def execute(self, req: ActionRequest) -> ActionResult:
         from .operate import still_docker, still_full  # spät: operate hängt über image_apply an diesem Modul
 
@@ -862,13 +885,8 @@ class DockerContainerExecutor:
             return ActionResult(success=False, error=why)
 
         if verb == "stop":
-            inspected = await self._ctx.exec.run(host, commands.container_id(name), timeout_s=15)
-            if inspected.exit_code == 0 and is_own_container(inspected.stdout.strip()):
-                return ActionResult(
-                    success=False,
-                    error=f"'{name}' ist der Container, in dem Nodvard Deck selbst läuft -- Stoppen würde "
-                    "diese Oberfläche abschalten. Neustarten geht, Stoppen nur direkt auf dem Host.",
-                )
+            if refusal := await self._self_stop_refusal(host, name):
+                return ActionResult(success=False, error=refusal)
         target = name
         if verb == "rm":
             refusal, container_id = await self._check_remove(host, name)

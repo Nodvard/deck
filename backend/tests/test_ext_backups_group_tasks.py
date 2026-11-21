@@ -6,6 +6,7 @@ import pytest
 from test_ext_backups import (  # noqa: F401
     _FRESH,
     _auth_header,
+    ext_backups_src,
     _backup_notifications,
     _cleanup_sys_path,
     _make_recent,
@@ -53,6 +54,60 @@ async def _jobs(client, headers):
     response = await client.get("/api/v1/ext/backups/jobs", headers=headers)
     assert response.status_code == 200, response.text
     return {row["vmid"]: row for row in response.json()}
+
+
+@pytest.mark.parametrize(
+    ("connection", "job_id", "vmid"),
+    [
+        ("pve2", "job1", "100"),
+        ("cluster--west", "nightly", "100"),
+        ("cluster", "west--nightly", "100"),
+        ("cluster", "-nightly-", "100"),
+        ("~x", "a", "1"),
+    ],
+)
+def test_job_reference_round_trips_unambiguously(ext_backups_src, connection, job_id, vmid):
+    from nodvard_deck_ext_backups.capabilities import _job_ref, _parse_job_ref
+
+    assert _parse_job_ref(_job_ref(connection, job_id, vmid)) == (connection, job_id, vmid)
+
+
+def test_manipulated_job_id_never_points_at_another_connection(ext_backups_src):
+    from nodvard_deck_ext_backups.capabilities import _job_ref, _parse_job_ref
+
+    ref = _job_ref("cluster", "west--nightly", "100")
+
+    assert ref != _job_ref("cluster--west", "nightly", "100")
+    assert _parse_job_ref(ref)[0] == "cluster"
+
+
+def test_new_references_never_contain_the_old_separator(ext_backups_src):
+    from nodvard_deck_ext_backups.capabilities import _job_ref
+
+    assert "--" not in _job_ref("cluster--west", "-a--b-", "100")
+
+
+@pytest.mark.parametrize("ref", ["", "nope", "j2zz", "j2" + b"[1,2,3]".hex(), "2" + b'["a","b","c"]'.hex(), "a--b"])
+def test_invalid_job_references_are_rejected(ext_backups_src, ref):
+    from nodvard_deck_ext_backups.capabilities import _parse_job_ref
+
+    with pytest.raises(ValueError):
+        _parse_job_ref(ref)
+
+
+def test_old_job_reference_of_an_open_page_still_parses(ext_backups_src):
+    from nodvard_deck_ext_backups.capabilities import _parse_job_ref
+
+    assert _parse_job_ref("pve2--backup-1a2b-3c--100") == ("pve2", "backup-1a2b-3c", "100")
+
+
+def test_watch_state_keys_keep_connections_apart(ext_backups_src):
+    from nodvard_deck_ext_backups.watch import _key_connection, age_key
+    from nodvard_deck_ext_backups.capabilities import _job_ref
+
+    assert _key_connection(_job_ref("cluster--west", "nightly", "100")) == "cluster--west"
+    assert _key_connection(age_key("~2d", "100")) == "~2d"
+    assert age_key("~2d", "100") != age_key("-", "100")
 
 
 @pytest.mark.asyncio

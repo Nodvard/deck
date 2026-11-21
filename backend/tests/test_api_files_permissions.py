@@ -25,6 +25,7 @@ PASSWORD = "whatever123"
 SSH_SOURCE = "ssh-sftp:pve1"
 SSH_FILES = {"/etc/shadow": b"root:geheim:19000::\n"}
 BROKEN_PATH = "/tmp/kaputt"
+SSH_FOLDERS = {"/", "/etc", "/tmp"}
 
 
 class _Attrs:
@@ -94,7 +95,7 @@ class _SpySftp:
 
     async def lstat(self, path: str) -> _Attrs:
         self.touched.append(f"lstat {path}")
-        return _Attrs(0)
+        return _Attrs(0, 0o040755) if path in SSH_FOLDERS else _Attrs(0)
 
     async def readdir(self, path: str) -> list[_Entry]:
         self.touched.append(f"readdir {path}")
@@ -140,7 +141,7 @@ class _FakeHosts:
         return [types.SimpleNamespace(id="pve1", name="pve1", display_name="pve1", has_credential=True)]
 
     async def get(self, host_id: str):
-        return types.SimpleNamespace(id=host_id)
+        return types.SimpleNamespace(id=host_id, os_family="linux")
 
 
 class _OldSource:

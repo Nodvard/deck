@@ -3627,6 +3627,55 @@ async def test_a_finding_in_a_capped_run_with_an_unsafe_path_names_both_reasons(
     assert scans[0]["status"] == "infected"
 
 
+@pytest.mark.asyncio
+async def test_a_finding_after_an_abort_keeps_a_path_warning_and_the_capped_sentence():
+    from nodvard_deck_ext_shield.defender import ABORTED_NOTE
+
+    out = f"/tmp/evil.sh: {EICAR} FOUND\nScanned files: 2000\nInfected files: 1\nSkipped files: 7\n"
+    ctx = _FakeCtx(None, {"--file-list": out, "confirm_finding": "@@mode=755\n"})
+    scans, findings = await _scan_once(ctx, "watch")
+    assert not any("confirm_finding" in c for c in ctx.commands), ctx.commands
+    assert findings[0]["note"] == ABORTED_NOTE and "nachsehen" in findings[0]["note"]
+    for text in (scans[0]["error"], ctx.notes[0].body):
+        assert "abgebrochen" in text and "2000 von 2007" in text and "nichts automatisch verschoben" in text
+
+
+@pytest.mark.asyncio
+async def test_a_known_finding_without_a_note_gets_the_abort_note_after_an_abort():
+    import asyncio
+
+    from nodvard_deck_ext_shield.defender import ABORTED_NOTE, Defender
+    from nodvard_deck_ext_shield.models import Base
+
+    clean = f"/tmp/evil.sh: {EICAR} FOUND\nScanned files: 5\nInfected files: 1\n{MARK}1\n"
+    cut = f"/tmp/evil.sh: {EICAR} FOUND\nScanned files: 5\nInfected files: 1\n"
+    ctx = _FakeCtx(None, {"--file-list": clean, "confirm_finding": "@@mode=000\n"})
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    ctx._sm = async_sessionmaker(engine, expire_on_commit=False)
+    defender = Defender(ctx)
+    for out in (clean, cut):
+        ctx.outputs["--file-list"] = out
+        await defender.start_scans(await defender.target_hosts(), "watch", paths=None, trigger="manual")
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if not defender.is_running("h1", "watch"):
+                break
+    notes = [f["note"] for f in await defender.list_findings() if f["path"] == "/tmp/evil.sh"]
+    await engine.dispose()
+    assert ABORTED_NOTE in notes
+
+
+def test_the_realtime_hint_stays_the_note_while_an_abort_wins():
+    from nodvard_deck_ext_shield import antivirus as av
+    from nodvard_deck_ext_shield.defender import ABORTED_NOTE, REALTIME_UNCHECKED, UNRELIABLE_NOTE, _unsure_note
+
+    assert _unsure_note(av.ScanResult("infected", hint=REALTIME_UNCHECKED)) == REALTIME_UNCHECKED
+    assert _unsure_note(av.ScanResult("infected")) == UNRELIABLE_NOTE
+    assert _unsure_note(av.ScanResult("infected", hint="x", aborted=True)) == ABORTED_NOTE
+
+
 # --- Grund eines Fehlers und Code 2 ohne gepruefte Datei -----------------------------------------------------------
 # Ausgaben von clamscan 1.0.5 und 1.5.4 (Ubuntu 24.04, `clamscan -i --stdout`, Pfade gekuerzt). Die Zusammenfassung von
 # 0.103 sieht aus wie die von 1.0 ("Data scanned: 0.00 MB"), ab 1.5 stehen Bytes da ("0 B").
@@ -4665,7 +4714,7 @@ def _scan_client():
         async def target_hosts(self):
             return [Host(id="h1", name="pve2", display_name="pve2", address="10.0.0.2")]
 
-        async def start_scans(self, hosts, kind, *, paths, trigger):
+        async def start_scans(self, hosts, kind, *, paths, trigger, auto_quarantine=True):
             started.append(paths)
             return ["s1"]
 

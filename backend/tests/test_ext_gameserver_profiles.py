@@ -99,6 +99,24 @@ def test_server_args_and_invalid_config_values():
         profile.action_command("format-c", ServerConfig(profile="valheim-windows"))
 
 
+def test_server_name_may_contain_a_hyphen_surrounded_by_spaces():
+    assert parse_server_args('-name "Hugin - West" -world Welt')["name"] == "Hugin - West"
+
+
+def test_default_world_name_is_used_by_status_and_backup_commands():
+    profile = get_profile("valheim-windows")
+
+    config = ServerConfig(profile="valheim-windows")
+    for command in (profile.status_command(config), profile.action_command("backup", config)):
+        assert "else{'Dedicated'}" in _script(command)
+
+
+def test_stopped_service_does_not_report_players_from_old_log_lines():
+    status = get_profile("valheim-windows").parse_status(json.dumps({**_status(), "service": "Stopped"}))
+
+    assert status["players_online"] is None
+
+
 def test_commands_fit_the_windows_command_line_and_never_carry_the_password():
     """cmd.exe (Standard-Shell von Windows-OpenSSH) nimmt hoechstens 8191 Zeichen."""
     profile = get_profile("valheim-windows")

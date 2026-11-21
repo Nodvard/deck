@@ -9,7 +9,7 @@ from .connector import ProxmoxBackupApiError, ProxmoxBackupConnector
 
 _UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 _SIZE_RE = re.compile(r"(?:^|,)size=(\d+(?:\.\d+)?)([KMGT]?)(?:,|$)")
-_QEMU_DISK_RE = re.compile(r"^(scsi|virtio|sata|ide|efidisk|tpmstate)\d+$")
+_QEMU_DISK_RE = re.compile(r"^(scsi|virtio|sata|ide|nvme|efidisk|tpmstate)\d+$")
 _LXC_MP_RE = re.compile(r"^mp\d+$")
 
 

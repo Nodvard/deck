@@ -191,6 +191,35 @@ def unusable_exchange_text(exc: BaseException, url: str) -> str:
     return not_sendable
 
 
+_DNS_MARKERS = ("name or service not known", "getaddrinfo", "nodename nor servname", "no address associated", "name resolution")
+_REFUSED_MARKERS = ("connection refused", "errno 111", "[winerror 10061]")
+_CERT_MARKERS = ("certificate_verify_failed", "certificate verify failed", "self-signed", "self signed")
+_TLS_MARKERS = ("[ssl", "wrong_version_number", "unknown protocol", "record layer failure")
+
+
+def connection_text(exc: BaseException) -> str:
+    """Fester Satz zu einem Verbindungsfehler; der Text der Ausnahme wählt nur den Satz und kommt nie hinein."""
+    logging.getLogger(__name__).info("ntfy: Verbindungsfehler (%s)", type(exc).__name__)
+    if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+        return "Der ntfy-Server antwortet nicht (Zeitüberschreitung). Prüfe Adresse und Port und ob der Server läuft."
+    text = str(exc).lower()
+    if any(marker in text for marker in _CERT_MARKERS):
+        return (
+            "Das Zertifikat des ntfy-Servers wurde nicht akzeptiert. Prüfe die Adresse in den Einstellungen "
+            "oder richte ein Zertifikat ein, dem das Dashboard vertraut."
+        )
+    if any(marker in text for marker in _DNS_MARKERS):
+        return "Der Name in der Adresse des ntfy-Servers lässt sich nicht auflösen. Prüfe die Schreibweise und das Netzwerk."
+    if any(marker in text for marker in _REFUSED_MARKERS):
+        return "Der ntfy-Server lehnt die Verbindung ab. Läuft er, und stimmen Adresse und Port?"
+    if any(marker in text for marker in _TLS_MARKERS):
+        return (
+            "Die Verschlüsselung passt nicht zum Port des ntfy-Servers. Läuft er ohne https, "
+            "trage in den Einstellungen http:// ein (und umgekehrt)."
+        )
+    return "Der ntfy-Server ist nicht erreichbar. Prüfe Adresse und Port und ob der Server läuft."
+
+
 def priorities_from_settings(settings: Mapping[str, Any]) -> dict[Severity, int]:
     """ntfy-Priorität (1 bis 5) je Stufe aus den Einstellungen."""
     out: dict[Severity, int] = {}
@@ -394,6 +423,8 @@ class _NtfyChannel:
             return await self._ctx.http.request(method, url, **kwargs)
         except (httpx.ProtocolError, httpx.InvalidURL, ValueError) as exc:
             problem = unusable_exchange_text(exc, url)
+        except (httpx.HTTPError, OSError) as exc:
+            problem = connection_text(exc)
         # Außerhalb des `except`-Blocks: Sonst hinge die Ausnahme von httpx als `__context__` daran, und jeder Fehlertext,
         # der die Ursachenkette abschreibt, trüge ihren Text mit.
         raise NtfyError(problem)

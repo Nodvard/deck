@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 
 import { authedFetch, errorFromBody } from "./api";
+import { pinInSettings, STORED_SECRET_CODE } from "./connectionToken";
 import { Button } from "./ui";
 
 export interface ConnectionCertificateInfo {
@@ -103,8 +104,17 @@ export function ConnectionCertificate({
         setConfirmed(false);
         throw new Error(errorFromBody(body, res.status));
       }
-      if (!res.ok) throw new Error(errorFromBody(body, res.status));
-      setInfo(body as unknown as ConnectionCertificateInfo);
+      if (res.status === 409 && body.code === STORED_SECRET_CODE) {
+        // Mit hinterlegtem Token merkt der Kern den Fingerabdruck, nach Rückfrage mit Passwort.
+        if (!(await pinInSettings(extId, connection, info.sha256))) return;
+        const fresh = await authedFetch(path);
+        const freshBody = (await fresh.json().catch(() => ({}))) as Record<string, unknown>;
+        if (!fresh.ok) throw new Error(errorFromBody(freshBody, fresh.status));
+        setInfo(freshBody as unknown as ConnectionCertificateInfo);
+      } else {
+        if (!res.ok) throw new Error(errorFromBody(body, res.status));
+        setInfo(body as unknown as ConnectionCertificateInfo);
+      }
       setConfirmed(false);
       setMessage("Gemerkt. Nodvard Deck spricht jetzt nur mit dem Server, der genau dieses Zertifikat zeigt.");
       onSaved?.();

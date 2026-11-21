@@ -39,6 +39,16 @@ class NpmAuthError(NpmError):
     state = "auth_failed"
 
 
+STARTING_STATUS = (502, 503, 504)
+
+STARTING_TEXT = (
+    "Nginx Proxy Manager startet gerade noch oder ist kurz nicht bereit. Bitte in einer Minute erneut versuchen."
+)
+WRONG_ADDRESS_TEXT = (
+    "Unter dieser Adresse läuft die Verwaltungsoberfläche des Nginx Proxy Managers nicht (HTTP 405). Bitte die Adresse "
+    "in den Einstellungen prüfen, bei einem Pfad auch den Pfad."
+)
+
 PasswordGetter = Callable[[], Awaitable[str | None]]
 
 
@@ -216,6 +226,10 @@ class NpmClient:
                 "Unter dieser Adresse antwortet keine Nginx-Proxy-Manager-Schnittstelle. Gemeint ist die "
                 "Verwaltungsoberfläche, meist Port 81."
             )
+        if response.status_code == 405:
+            raise NpmError(WRONG_ADDRESS_TEXT)
+        if response.status_code in STARTING_STATUS:
+            raise NpmError(STARTING_TEXT)
         if response.status_code in (400, 401, 403):
             raise NpmAuthError("Nginx Proxy Manager hat die Anmeldung abgelehnt – bitte E-Mail-Adresse und Passwort prüfen.")
         if response.status_code >= 400:
@@ -263,6 +277,8 @@ class NpmClient:
 
     async def _api_json(self, method: str, path: str) -> Any:
         response = await self._api(method, path)
+        if response.status_code in STARTING_STATUS:
+            raise NpmError(STARTING_TEXT)
         if response.status_code >= 400:
             detail = error_message(response)
             raise NpmError(f"Nginx Proxy Manager meldet einen Fehler (HTTP {response.status_code}{': ' + detail if detail else ''}).")

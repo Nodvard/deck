@@ -546,7 +546,7 @@ async def test_broadcast_of_a_renamed_extension_also_goes_to_the_channels_of_its
 
         hub = get_ws_hub()
         socket = _Socket()
-        conn = hub.connect(socket, user_id="u1")
+        conn = hub.connect(socket, user_id="u1", permissions=["*"])
         for channel in ("ext.renamed-ext.x", "ext.old-ext.x", "ext.older-ext.x", "ext.fremd-ext.x", "ext.plain-ext.x"):
             hub.subscribe(conn, channel)
 
@@ -907,6 +907,80 @@ async def test_settings_handle_get_set_roundtrip(tmp_path, db_session):
 
 
 @pytest.mark.asyncio
+async def test_settings_update_changes_one_key_and_calls_hook(tmp_path, db_session):
+    import asyncio
+
+    db_session.add(ExtensionRecord(
+        id="old-ext", version="1", api_version="0.1", state="enabled", settings={"other": True},
+    ))
+    await db_session.commit()
+    _, loaded, ctx = _build(tmp_path, ext_id="new-ext", store_id="old-ext")
+    seen = []
+
+    class _Ext:
+        async def on_settings_changed(self, hook_ctx, values):
+            seen.append((values, await hook_ctx.settings.get()))
+            await hook_ctx.settings.update("normalized", lambda _: True)
+
+    loaded.instance = _Ext()
+    await asyncio.wait_for(ctx.settings.update("items", lambda value: [*(value or []), "eins"]), timeout=5)
+    assert seen == [({"other": True, "items": ["eins"]}, {"other": True, "items": ["eins"]})]
+    assert await ctx.settings.get() == {"other": True, "items": ["eins"], "normalized": True}
+
+
+@pytest.mark.asyncio
+async def test_settings_update_failure_keeps_values(tmp_path, db_session):
+    db_session.add(ExtensionRecord(
+        id="test-ext", version="1", api_version="0.1", state="enabled", settings={"items": ["eins"]},
+    ))
+    await db_session.commit()
+    _, loaded, ctx = _build(tmp_path)
+    seen = []
+
+    class _Ext:
+        async def on_settings_changed(self, hook_ctx, values):
+            seen.append(values)
+
+    def fail(value):
+        value.append("zwei")
+        raise ValueError("ungültig")
+
+    loaded.instance = _Ext()
+    with pytest.raises(ValueError, match="ungültig"):
+        await ctx.settings.update("items", fail)
+    assert await ctx.settings.get() == {"items": ["eins"]}
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_settings_updates_share_a_lock_between_handles(tmp_path, file_db, monkeypatch):
+    import asyncio
+
+    from nodvard_deck.services import extensions
+
+    async with file_db() as session:
+        session.add(ExtensionRecord(
+            id="old-ext", version="1", api_version="0.1", state="enabled", settings={"items": [], "other": True},
+        ))
+        await session.commit()
+    _, _, first = _build(tmp_path, ext_id="new-ext", store_id="old-ext")
+    _, _, second = _build(tmp_path, ext_id="old-ext")
+    original = extensions.get_record
+
+    async def read_then_yield(*args, **kwargs):
+        record = await original(*args, **kwargs)
+        await asyncio.sleep(0.01)
+        return record
+
+    monkeypatch.setattr(extensions, "get_record", read_then_yield)
+    await asyncio.wait_for(asyncio.gather(*(
+        ctx.settings.update("items", lambda value, i=i: [*value, i])
+        for i, ctx in enumerate([first, second] * 4)
+    )), timeout=5)
+    assert await first.settings.get() == {"items": list(range(8)), "other": True}
+
+
+@pytest.mark.asyncio
 async def test_settings_set_calls_on_settings_changed_after_commit(tmp_path, db_session):
     """Das SDK versprach den Hook, der Kern rief ihn nie auf. Jetzt: nach dem
     Speichern, mit den neuen Werten lesbar, ohne Endlosschleife bei set() im Hook, und
@@ -1188,6 +1262,167 @@ async def test_capabilities_query_restricted_to_requires(tmp_path):
     found = await consumer_with_requires.capabilities.query(SearchProvider)
     assert len(found) == 1
     assert isinstance(found[0], _Search)
+
+
+@pytest.mark.parametrize("action_type,provider_ref,payload,method,args", [
+    ("node.reboot", "cluster/node/pve1", {}, "node_reboot", ("pve1",)),
+    (
+        "vm.snapshot_delete", "cluster/qemu/pve1/100", {"snapname": "fremder-snapshot"},
+        "snapshot_delete", ("pve1", "qemu", "100", "fremder-snapshot"),
+    ),
+])
+async def test_capabilities_query_hides_proxmox_executor_and_gate_still_executes(
+    tmp_path, db_session, monkeypatch, action_type, provider_ref, payload, method, args,
+):
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from nodvard_sdk import GateOutcome
+    from nodvard_sdk.capabilities import ActionExecutor
+    from sqlalchemy import select
+
+    from nodvard_deck.core import gate
+    from nodvard_deck.ext import runtime as runtime_module
+    from nodvard_deck.models import AuditEntry, Host
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "extensions/proxmox/src"))
+    from nodvard_deck_ext_proxmox import capabilities
+
+    runtime = ExtensionRuntime()
+    monkeypatch.setattr(runtime_module, "_runtime", runtime)
+    _, _, provider = _build(tmp_path, ext_id="proxmox", permissions=["hosts.read"], runtime=runtime)
+    executor = capabilities.ProxmoxActionExecutor(provider)
+    provider.capabilities.provide(executor)
+    connector = SimpleNamespace(
+        node_reboot=AsyncMock(), snapshot_delete=AsyncMock(return_value="UPID:test"),
+        wait_for_task=AsyncMock(return_value={"status": "stopped", "exitstatus": "OK"}),
+    )
+    lookup = AsyncMock(return_value=connector)
+    monkeypatch.setattr(capabilities, "_connector_for", lookup)
+    host = Host(name="pve1", address="192.0.2.1", provider_ext_id="proxmox", provider_ref=provider_ref)
+    db_session.add(host)
+    await db_session.commit()
+    _, _, consumer = _build(tmp_path, requires=["proxmox"], permissions=["hosts.execute"], runtime=runtime)
+    request = ActionRequest(
+        action_type=action_type, host_ref=host.id, payload=payload,
+        proposed_by=Actor.extension("fremdes-modul"), reason="Aktion prüfen",
+    )
+
+    found = await consumer.capabilities.query(ActionExecutor)
+    for candidate in found:
+        await candidate.execute(request)
+    assert found == []
+    lookup.assert_not_awaited()
+    connector.node_reboot.assert_not_awaited()
+    connector.snapshot_delete.assert_not_awaited()
+    assert await gate.find_executor(action_type) is executor
+
+    decision = await consumer.actions.propose(request.model_copy(update={"proposed_by": Actor.extension("test-ext")}))
+    assert decision.outcome == GateOutcome.REQUIRE_CONFIRMATION
+    lookup.assert_not_awaited()
+    action, moved = await gate.approve(db_session, decision.action_id, user_id="test-user")
+    assert moved and action.status == "succeeded"
+    lookup.assert_awaited_once_with(provider, "cluster")
+    getattr(connector, method).assert_awaited_once_with(*args)
+    entries = (await db_session.execute(select(AuditEntry).where(AuditEntry.target_id == action.id))).scalars().all()
+    assert {entry.action for entry in entries} == {"action.proposed", "action.approved", "action.executed"}
+
+
+async def test_capabilities_query_hides_pihole_executor_and_gate_still_executes(tmp_path, db_session, monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from nodvard_sdk import GateOutcome
+    from nodvard_sdk.capabilities import ActionExecutor
+    from sqlalchemy import select
+
+    from nodvard_deck.core import gate
+    from nodvard_deck.ext import runtime as runtime_module
+    from nodvard_deck.models import AuditEntry
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "extensions/pihole/src"))
+    from nodvard_deck_ext_pihole.actions import PIHOLE_PAUSE, PiholeActionExecutor
+
+    runtime = ExtensionRuntime()
+    monkeypatch.setattr(runtime_module, "_runtime", runtime)
+    client = SimpleNamespace(set_blocking=AsyncMock(return_value={"enabled": False, "timer_s": 300}))
+    service = SimpleNamespace(client=AsyncMock(return_value=client))
+    executor = PiholeActionExecutor(service)
+    _, _, provider = _build(tmp_path, ext_id="pihole", runtime=runtime)
+    provider.capabilities.provide(executor)
+    _, _, consumer = _build(tmp_path, requires=["pihole"], permissions=["hosts.execute"], runtime=runtime)
+    request = ActionRequest(
+        action_type=PIHOLE_PAUSE, payload={"minutes": 5},
+        proposed_by=Actor.extension("fremdes-modul"), reason="Pi-hole-Pause prüfen",
+    )
+
+    found = await consumer.capabilities.query(ActionExecutor)
+    for candidate in found:
+        await candidate.execute(request)
+    assert found == []
+    service.client.assert_not_awaited()
+    client.set_blocking.assert_not_awaited()
+    assert await gate.find_executor(PIHOLE_PAUSE) is executor
+
+    decision = await consumer.actions.propose(request.model_copy(update={"proposed_by": Actor.extension("test-ext")}))
+    assert decision.outcome == GateOutcome.REQUIRE_CONFIRMATION
+    client.set_blocking.assert_not_awaited()
+    action, moved = await gate.approve(db_session, decision.action_id, user_id="test-user")
+    assert moved and action.status == "succeeded"
+    client.set_blocking.assert_awaited_once_with(False, timer_s=300)
+    entries = (await db_session.execute(select(AuditEntry).where(AuditEntry.target_id == action.id))).scalars().all()
+    assert {entry.action for entry in entries} == {"action.proposed", "action.approved", "action.executed"}
+
+
+@pytest.mark.parametrize("protocol_name,members", [
+    ("CommandRunner", ("run",)),
+    ("TerminalTarget", ("can_open", "open")),
+    ("ScopedTerminalTarget", ("can_open_in", "open_in")),
+    ("ConsoleTarget", ("console_available", "open_console")),
+])
+@pytest.mark.parametrize("requires", [["provider-ext"], ["old-ext>=0.1"]])
+async def test_capabilities_query_hides_core_execution_protocols(tmp_path, protocol_name, members, requires):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from nodvard_sdk import capabilities
+
+    runtime = ExtensionRuntime()
+    runtime.legacy_owner = {"old-ext": "provider-ext"}
+    _, _, provider = _build(tmp_path, ext_id="provider-ext", runtime=runtime)
+    implementation = SimpleNamespace(scope="container", **{name: AsyncMock() for name in members})
+    provider.capabilities.provide(implementation)
+    _, _, consumer = _build(tmp_path, requires=requires, permissions=["hosts.execute"], runtime=runtime)
+    protocol = getattr(capabilities, protocol_name)
+
+    assert runtime.capabilities.query(protocol) == [implementation]
+    assert await consumer.capabilities.query(protocol) == []
+    for name in members:
+        getattr(implementation, name).assert_not_awaited()
+
+
+@pytest.mark.parametrize("protocol_name", ["SearchProvider", "ServiceCatalog"])
+async def test_capabilities_query_hides_executors_registered_for_another_protocol(tmp_path, protocol_name):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from nodvard_sdk import ActionResult, capabilities
+
+    runtime = ExtensionRuntime()
+    _, _, provider = _build(tmp_path, ext_id="provider-ext", runtime=runtime)
+    implementation = SimpleNamespace(
+        action_types=frozenset({"test.change"}), execute=AsyncMock(return_value=ActionResult(success=True)),
+        dry_run=AsyncMock(return_value=None), search=AsyncMock(return_value=[]), list_services=AsyncMock(return_value=[]),
+    )
+    provider.capabilities.provide(implementation)
+    _, _, consumer = _build(tmp_path, requires=["provider-ext"], runtime=runtime)
+    protocol = getattr(capabilities, protocol_name)
+
+    assert runtime.capabilities.query(protocol) == [implementation]
+    assert await consumer.capabilities.query(protocol) == []
+    implementation.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio

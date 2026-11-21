@@ -362,16 +362,14 @@ async def test_nextcloud_zeitueberschreitung_hat_einen_grund_obwohl_der_text_lee
 
 
 @pytest.mark.asyncio
-async def test_nextcloud_anderer_fehler_ohne_text_nennt_wenigstens_den_namen():
-    connector = _nextcloud_connector(httpx.ConnectError(""))
-    with pytest.raises(Exception) as caught:
-        await connector.stat_one("/x")
-    assert str(caught.value) == "PROPFIND /x -> ConnectError"
-    # Mit Text bleibt der Text.
-    connector = _nextcloud_connector(httpx.ConnectError("All connection attempts failed"))
-    with pytest.raises(Exception) as caught:
-        await connector.stat_one("/x")
-    assert str(caught.value) == "PROPFIND /x -> All connection attempts failed"
+async def test_nextcloud_anderer_fehler_gibt_einen_festen_satz():
+    sentence = "Die Nextcloud ist nicht erreichbar. Prüfe Adresse und Port und ob der Server läuft."
+    for text in ("", "All connection attempts failed"):
+        connector = _nextcloud_connector(httpx.ConnectError(text))
+        with pytest.raises(Exception) as caught:
+            await connector.stat_one("/x")
+        assert str(caught.value) == sentence
+        assert "PROPFIND" not in str(caught.value) and "->" not in str(caught.value)
 
 
 @pytest.mark.asyncio

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 import httpx
 from nodvard_sdk.errors import NodvardError
+
+log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 10.0  # je Lese- und Verbindungsschritt (httpx)
 # Gesamtfrist: ein Server, der Byte für Byte tropft, hielte sonst ewig.
@@ -98,17 +101,34 @@ def _unusable_exchange_text(exc: BaseException, url: str, service: str) -> str:
     return f"Die Anfrage an {service} ließ sich nicht senden. Prüfe die Einstellungen."
 
 
+_DNS_MARKERS = ("name or service not known", "getaddrinfo", "nodename nor servname", "no address associated", "name resolution")
+_REFUSED_MARKERS = ("connection refused", "errno 111", "[winerror 10061]")
+_CERT_MARKERS = ("certificate_verify_failed", "certificate verify failed", "self-signed", "self signed")
+_TLS_MARKERS = ("[ssl", "wrong_version_number", "unknown protocol", "record layer failure")
+
+
 def _transport_error(exc: BaseException, service: str) -> KumaError:
-    text = str(exc)
-    if "CERTIFICATE_VERIFY_FAILED" in text or "certificate verify failed" in text.lower():
+    """Fester Satz je Fehlerart; der Text der Ausnahme wählt nur den Satz und steht nur im Protokoll."""
+    # Nur die Art im Protokoll: der Text könnte Adresse oder Schlüssel zitieren.
+    log.info("%s: Verbindungsfehler (%s)", service, type(exc).__name__)
+    text = str(exc).lower()
+    if any(marker in text for marker in _CERT_MARKERS):
         return KumaError(
             f"{service}: Das Zertifikat wurde nicht akzeptiert. Bei einem selbstsignierten Zertifikat in den "
             "Einstellungen „Selbstsigniertes Zertifikat erlauben“ einschalten."
         )
     if isinstance(exc, httpx.TimeoutException):
-        return Unreachable(f"{service} antwortet nicht (Zeitüberschreitung).")
-    detail = _short(text) if text.strip() else type(exc).__name__
-    return Unreachable(f"{service} ist nicht erreichbar ({detail}).")
+        return Unreachable(f"{service} antwortet nicht (Zeitüberschreitung). Prüfe Adresse und Port und ob der Server läuft.")
+    if any(marker in text for marker in _DNS_MARKERS):
+        return Unreachable(f"{service}: Der Name in der Adresse lässt sich nicht auflösen. Prüfe die Schreibweise und das Netzwerk.")
+    if any(marker in text for marker in _REFUSED_MARKERS):
+        return Unreachable(f"{service} lehnt die Verbindung ab. Läuft der Server, und stimmen Adresse und Port?")
+    if any(marker in text for marker in _TLS_MARKERS):
+        return KumaError(
+            f"{service}: Die Verschlüsselung passt nicht zum Port. Läuft der Server ohne https, "
+            "trage in den Einstellungen http:// ein (und umgekehrt)."
+        )
+    return Unreachable(f"{service} ist nicht erreichbar. Prüfe Adresse und Port und ob der Server läuft.")
 
 
 class _TooLarge(Exception):

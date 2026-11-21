@@ -397,8 +397,10 @@ async def test_transport_passes_the_tls_choice_and_returns_other_status_codes():
     ("error", "state", "fragment"),
     [
         (httpx.ReadTimeout("timed out"), "unreachable", "antwortet nicht (Zeitüberschreitung)"),
-        (httpx.ConnectError("[Errno 111] Connection refused"), "unreachable", "ist nicht erreichbar ([Errno 111] Connection refused)"),
-        (httpx.ConnectError("[Errno -2] Name or service not known"), "unreachable", "Name or service not known"),
+        (httpx.ConnectError("[Errno 111] Connection refused"), "unreachable", "lehnt die Verbindung ab"),
+        (httpx.ConnectError("[Errno -2] Name or service not known"), "unreachable", "lässt sich nicht auflösen"),
+        (httpx.ConnectError("[SSL: WRONG_VERSION_NUMBER] wrong version number"), "error", "Verschlüsselung passt nicht zum Port"),
+        (httpx.ConnectError("All connection attempts failed"), "unreachable", "ist nicht erreichbar. Prüfe Adresse"),
         (httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"), "error", "Selbstsigniertes Zertifikat erlauben"),
         (httpx.RemoteProtocolError("illegal header line: bytearray(b'X-Geheim: abc')"), "error", "Verbindung abgebrochen oder eine fehlerhafte Antwort"),
         (httpx.LocalProtocolError("Illegal header value b'Basic xyz'"), "error", "fehlerhafte Antwort"),
@@ -413,6 +415,8 @@ async def test_transport_error_sentences(error, state, fragment):
     assert caught.value.state == state
     assert fragment in str(caught.value)
     assert "X-Geheim" not in str(caught.value) and "xyz" not in str(caught.value), "der Text der Ausnahme wird nicht zitiert"
+    for raw in ("Errno", "Connection refused", "Name or service", "SSL:", "All connection attempts"):
+        assert raw not in str(caught.value), "kein roher englischer Text"
     assert caught.value.__cause__ is None and caught.value.__context__ is None
 
 
@@ -939,8 +943,8 @@ async def test_redirects_are_reported_never_followed_and_never_show_the_foreign_
     [
         (httpx.ReadTimeout("timed out"), "antwortet nicht (Zeitüberschreitung)"),
         (httpx.ConnectTimeout("timed out"), "antwortet nicht (Zeitüberschreitung)"),
-        (httpx.ConnectError("[Errno 111] Connection refused"), "Connection refused"),
-        (httpx.ConnectError("[Errno -2] Name or service not known"), "Name or service not known"),
+        (httpx.ConnectError("[Errno 111] Connection refused"), "lehnt die Verbindung ab"),
+        (httpx.ConnectError("[Errno -2] Name or service not known"), "lässt sich nicht auflösen"),
     ],
 )
 async def test_unreachable_server_is_a_clean_state_and_the_second_request_is_skipped(client, db_session, test_settings, error, fragment):

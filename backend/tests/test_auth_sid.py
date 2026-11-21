@@ -228,11 +228,11 @@ async def test_password_change_from_an_older_tab_keeps_both_tabs(client):
     assert r.status_code == 204, r.text
     assert await _me(client, older) == 200
     assert await _me(client, rotated.json()["access_token"]) == 200
+    _browser_holds(client, current_cookie)
+    assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 200
     # Die Gnadenfrist des alten Refresh-Tokens ist trotzdem vorbei.
     _browser_holds(client, old_cookie)
     assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 401
-    _browser_holds(client, current_cookie)
-    assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 200
 
 
 @pytest.mark.asyncio

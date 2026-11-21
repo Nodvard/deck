@@ -1564,6 +1564,10 @@
     },
     "set": {
      "values": true
+    },
+    "update": {
+     "key": true,
+     "transform": true
     }
    }
   },

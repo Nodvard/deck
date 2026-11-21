@@ -210,11 +210,10 @@ async def test_an_old_state_survives_a_host_that_stops_answering(monkeypatch, ex
 
 
 @pytest.mark.asyncio
-async def test_a_host_that_never_answered_gives_an_error_the_core_turns_into_a_log_line(ext):
+async def test_a_host_that_never_answered_gives_no_places(ext):
     host = _host()
     ctx = _ctx(host, outputs={"h1": TimeoutError("keine Antwort")})
-    with pytest.raises(TimeoutError):
-        await ext.DockerFilePlaces(ctx, ext.docker_caps.DockerServiceCatalog(ctx)).places_for_host("h1")
+    assert await ext.DockerFilePlaces(ctx, ext.docker_caps.DockerServiceCatalog(ctx)).places_for_host("h1") == []
 
 
 @pytest.mark.asyncio

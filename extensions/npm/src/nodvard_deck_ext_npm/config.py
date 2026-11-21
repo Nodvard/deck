@@ -3,6 +3,7 @@ Anmeldung gelesen."""
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Any
@@ -64,7 +65,7 @@ def normalize_url(raw: Any, *, strip_suffixes: tuple[str, ...] = ()) -> str | No
     parts = urlsplit(text)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ValueError(text)
-    path = strip_ui_path(parts.path)
+    path = strip_ui_path(re.sub("/{2,}", "/", parts.path))
     changed = True
     while changed:
         changed = False

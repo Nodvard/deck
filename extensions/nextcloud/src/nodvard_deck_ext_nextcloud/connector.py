@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import posixpath
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -17,6 +18,8 @@ from defusedxml import ElementTree as SafeET
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
+
+log = logging.getLogger(__name__)
 
 _DAV = "{DAV:}"
 
@@ -94,7 +97,33 @@ def _transport_problem(method: str, path: str, url: str, exc: BaseException) -> 
         if _came_from_redirect(exc):
             return redirect_text()
         return "Die Anfrage an die Nextcloud ließ sich nicht senden. Prüfe die Einstellungen."
-    return f"{method} {path} -> {str(exc).strip() or type(exc).__name__}"
+    log.info("Nextcloud: Verbindungsfehler (%s)", type(exc).__name__)  # der Text könnte Adresse oder Zugangsdaten zitieren
+    return _connection_text(str(exc).lower())
+
+
+_DNS_MARKERS = ("name or service not known", "getaddrinfo", "nodename nor servname", "no address associated", "name resolution")
+_REFUSED_MARKERS = ("connection refused", "errno 111", "[winerror 10061]")
+_CERT_MARKERS = ("certificate_verify_failed", "certificate verify failed", "self-signed", "self signed")
+_TLS_MARKERS = ("[ssl", "wrong_version_number", "unknown protocol", "record layer failure")
+
+
+def _connection_text(text: str) -> str:
+    """Fester Satz zu einem Verbindungsfehler; `text` (klein geschrieben) wählt nur den Satz."""
+    if any(marker in text for marker in _CERT_MARKERS):
+        return (
+            "Das Zertifikat der Nextcloud wurde nicht akzeptiert. Bei einem selbstsignierten Zertifikat in den "
+            "Einstellungen „Selbstsigniertes Zertifikat erlauben“ einschalten."
+        )
+    if any(marker in text for marker in _DNS_MARKERS):
+        return "Der Name in der Adresse der Nextcloud lässt sich nicht auflösen. Prüfe die Schreibweise und das Netzwerk."
+    if any(marker in text for marker in _REFUSED_MARKERS):
+        return "Die Nextcloud lehnt die Verbindung ab. Läuft sie, und stimmen Adresse und Port?"
+    if any(marker in text for marker in _TLS_MARKERS):
+        return (
+            "Die Verschlüsselung passt nicht zum Port der Nextcloud. Läuft sie ohne https, "
+            "trage in den Einstellungen http:// ein (und umgekehrt)."
+        )
+    return "Die Nextcloud ist nicht erreichbar. Prüfe Adresse und Port und ob der Server läuft."
 
 
 def _status_problem(method: str, path: str, status_code: int) -> str | None:

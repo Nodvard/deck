@@ -366,3 +366,87 @@ async def test_a_run_from_a_changed_backup_cannot_read_other_files(client, db_se
     await db_session.commit()
     r = await client.get("/api/v1/runs/aus-sicherung/output", headers=_auth_header(token))
     assert r.status_code == 200 and r.json() == {"output": ""}
+
+
+async def _start_slow_run(db_session, *, ext_id, key):
+    started = asyncio.Event()
+
+    async def _slow(**kwargs):
+        started.set()
+        await asyncio.sleep(30)
+
+    job = await jobs_service.upsert_job(
+        db_session, ext_id=ext_id, ext_job_key=key, name="Langer Lauf", kind="core" if ext_id is None else "ext",
+        schedule="0 3 * * *", params={}, enabled=True,
+    )
+    await db_session.commit()
+    task = asyncio.ensure_future(get_scheduler_service().trigger_now(job, _slow))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    return job, task
+
+
+async def _cancel_entries(client, token):
+    r = await client.get("/api/v1/audit", params={"action": "job.run.cancelled"}, headers=_auth_header(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    return body["items"] if isinstance(body, dict) else body
+
+
+async def _login(client, username):
+    r = await client.post("/api/v1/auth/login", json={"username": username, "password": "whatever123"})
+    assert r.status_code == 200, r.text
+    return r.json()["access_token"]
+
+
+def _roll_back_on_errors_like_production(monkeypatch, db_session):
+    from nodvard_deck.api.deps import get_session
+    from nodvard_deck.main import app
+
+    async def _session():
+        try:
+            yield db_session
+            await db_session.commit()
+        except Exception:
+            await db_session.rollback()
+            raise
+
+    monkeypatch.setitem(app.dependency_overrides, get_session, _session)
+
+
+@pytest.mark.asyncio
+async def test_operator_cannot_cancel_the_automatic_backup(client, db_session, monkeypatch):
+    from nodvard_deck.services.backups import JOB_KEY
+
+    _roll_back_on_errors_like_production(monkeypatch, db_session)
+    owner = await _bootstrap_owner(client)
+    operator = await _create_user_with_role(db_session, username="op3", password="whatever123", role="operator")
+    job, task = await _start_slow_run(db_session, ext_id=None, key=JOB_KEY)
+    run_id = (await client.get(f"/api/v1/jobs/{job.id}/runs", headers=_auth_header(owner))).json()[0]["id"]
+
+    r = await client.post(f"/api/v1/runs/{run_id}/cancel", headers=_auth_header(await _login(client, "op3")))
+    assert r.status_code == 403, r.text
+    assert "Owner" in r.json()["detail"]
+    assert not task.done()
+
+    denied = [e for e in await _cancel_entries(client, owner) if e["outcome"] == "denied"]
+    assert [(e["actor_id"], e["target_id"]) for e in denied] == [(operator.id, run_id)]
+
+    r = await client.post(f"/api/v1/runs/{run_id}/cancel", headers=_auth_header(owner))
+    assert r.status_code == 200, r.text
+    await task
+    assert (await client.get(f"/api/v1/runs/{run_id}", headers=_auth_header(owner))).json()["status"] != "running"
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_run_is_audited(client, db_session):
+    owner = await _bootstrap_owner(client)
+    operator = await _create_user_with_role(db_session, username="op4", password="whatever123", role="operator")
+    job, task = await _start_slow_run(db_session, ext_id="test-ext", key="slow-job")
+    run_id = (await client.get(f"/api/v1/jobs/{job.id}/runs", headers=_auth_header(owner))).json()[0]["id"]
+
+    r = await client.post(f"/api/v1/runs/{run_id}/cancel", headers=_auth_header(await _login(client, "op4")))
+    assert r.status_code == 200, r.text
+    await task
+
+    done = [e for e in await _cancel_entries(client, owner) if e["outcome"] == "success"]
+    assert [(e["actor_id"], e["target_id"]) for e in done] == [(operator.id, run_id)]

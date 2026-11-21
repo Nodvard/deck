@@ -15,6 +15,7 @@ from ..core import audit as core_audit
 from ..core.audit import write_entry
 from ..db import utcnow
 from ..models import AuditEntry, HostMerge, User
+from .notifications import ACCOUNT_TITLE_PREFIXES, is_foreign_account_notice
 
 __all__ = [
     "RETENTION_KEY", "RETENTION_MAX_DAYS", "RETENTION_MIN_DAYS",
@@ -116,6 +117,38 @@ async def hide_typed_names(
             copy.actor_type, copy.actor_id = "anonymous", "unbekannt"
         hidden[e.id] = copy
     return [hidden.get(e.id, e) for e in entries]  # type: ignore[misc]
+
+
+# Felder in `user.*`-Einträgen, die ein Konto benennen oder seine Rollen zeigen.
+ACCOUNT_DETAIL_KEYS = ("username", "roles")
+
+
+def _hidden_keys(e: AuditEntry, viewer_id: str) -> tuple[str, ...]:
+    detail = e.detail or {}
+    if e.action.startswith("user.") and e.target_id != viewer_id:
+        return tuple(k for k in ACCOUNT_DETAIL_KEYS if k in detail)
+    # Titel gelöschter Kontomeldungen nennen das Konto; alte Einträge ohne Art erkennt man am Titel.
+    if e.action == "notifications.deleted" and "title" in detail:
+        if "notification_type" in detail:
+            foreign = is_foreign_account_notice(detail, viewer_id)
+        else:
+            foreign = str(detail["title"]).startswith(ACCOUNT_TITLE_PREFIXES)
+        if foreign:
+            return ("title",)
+    return ()
+
+
+def hide_other_accounts(entries: list[AuditEntry], viewer_id: str) -> list[AuditEntry]:
+    """Entfernt in Kopien der Einträge Namen, Rollen und Meldungstitel fremder Konten; eigene bleiben vollständig."""
+    out: list[AuditEntry] = []
+    for e in entries:
+        hidden = _hidden_keys(e, viewer_id)
+        if hidden:
+            copy = SimpleNamespace(**{c.name: getattr(e, c.name) for c in AuditEntry.__table__.columns})
+            copy.detail = {k: v for k, v in (e.detail or {}).items() if k not in hidden}
+            e = copy  # type: ignore[assignment]
+        out.append(e)
+    return out
 
 
 async def effective_retention_days(session: AsyncSession, *, fallback: int) -> int:

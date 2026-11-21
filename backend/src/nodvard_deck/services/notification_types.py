@@ -40,9 +40,15 @@ class NotificationTypeOut(BaseModel):
 def catalog(extensions_dir: Path) -> dict[str, str]:
     types = dict(TYPES)
     for path in sorted(extensions_dir.glob("*/notification-types.json")):
-        entries = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(entries, dict):
+            continue
         for key, label in entries.items():
-            types.setdefault(key, label)
+            if isinstance(key, str) and isinstance(label, str):
+                types.setdefault(key, label)
     return types
 
 

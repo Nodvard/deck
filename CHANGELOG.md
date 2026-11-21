@@ -10,6 +10,43 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.14.3] – 2026-11-21
+
+Security and bugfix release: permissions in Shield, the audit log and live messages, login renewal, stored
+credentials, backups, uploads to servers and smaller fixes.
+
+### Upgrade notes
+
+- Only with limited accounts: triggering updates, quarantine or bans in Shield now also needs the permission to run
+  commands on servers.
+
+### Fixed
+
+- Shield offers to exclude a folder with many findings from scans and to reopen its findings later.
+- Shield keeps scan findings with the right server after a merge during the scan.
+- Shield says that a scan was cut off (for example at its time limit) instead of blaming a line break in a file name.
+- Unreachable Proxmox storage is shown clearly and reported once; connections with leading or trailing spaces in the
+  name can be removed again.
+- Backup jobs and connections with double hyphens in the name are no longer mixed up.
+- Docker image updates always run in the project folder of the stack; several smaller Docker fixes.
+- Nginx Proxy Manager keeps a path in its address and reports a starting service instead of a login error.
+- Uptime Kuma, ntfy and Nextcloud files show short German sentences when unreachable.
+- Saving module settings keeps concurrent changes to hidden values.
+
+### Security
+
+- Shield actions that run as root need the permission to run commands on servers, also with full automation.
+- The audit log hides server texts and other accounts from accounts without the matching permission.
+- Live messages only reach accounts with the matching permission; at most 20 live connections per account.
+- A reused, already renewed login ends the whole login chain; a login started with an old password cannot be
+  completed after a password change.
+- Stored credentials cannot be deleted, pointed elsewhere or used with weaker certificate checking without the
+  password.
+- Retrying a Proxmox backup job only covers guests of that job; only the owner cancels a running automatic backup;
+  backup download links are bound to the login.
+- Uploads to a server no longer follow links owned by other accounts.
+- Modules can no longer run actions, commands, terminals or consoles through other modules without approval.
+
 ## [0.14.2] – 2026-11-17
 
 Security and bugfix release: Shield with deleted servers, first setup, two-factor login, credentials in service

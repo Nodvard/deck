@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from ...config import Settings, get_settings
 from ...core import security
-from ...core.ws_hub import get_ws_hub
+from ...core.ws_hub import ConnectionLimitReached, get_ws_hub
 from ...db.session import session_scope
 from ...models import User
 from ...services import session_guard
@@ -33,6 +33,9 @@ _WS_AUTH_TIMEOUT = 4401
 _WS_AUTH_FAILED = 4401
 _WS_ACCESS_ENDED = 4401
 """Konto deaktiviert, Passwort geändert, abgemeldet oder Zugangs-Token abgelaufen (laufende Verbindung)."""
+_WS_TOO_MANY = 4429
+
+TOO_MANY_MESSAGE = "Zu viele offene Live-Verbindungen für dieses Konto. Schließe nicht benötigte Tabs."
 
 TOKEN_EXPIRED_MESSAGE = "Die Anmeldung der Live-Verbindung ist abgelaufen."
 """Die Seite verbindet sich danach mit ihrem erneuerten Zugangs-Token selbst neu (lib/ws.ts)."""
@@ -108,10 +111,23 @@ async def ws_multiplex(websocket: WebSocket, settings: Annotated[Settings, Depen
         return
     user, permissions, watch, token_expires_at = authenticated
 
-    await websocket.send_json({"type": "auth_ok"})
-
     hub = get_ws_hub()
-    conn_id = hub.connect(websocket, user_id=user.id, permissions=permissions)
+    try:
+        conn_id = hub.connect(websocket, user_id=user.id, permissions=permissions)
+    except ConnectionLimitReached:
+        logger.warning("ws_connection_limit user_id=%s", user.id)
+        try:
+            await websocket.send_json({"type": "error", "payload": {"title": TOO_MANY_MESSAGE}})
+            await websocket.close(code=_WS_TOO_MANY)
+        except Exception:  # noqa: BLE001 - der Client ist möglicherweise schon weg
+            pass
+        return
+
+    try:
+        await websocket.send_json({"type": "auth_ok"})
+    except Exception:
+        hub.disconnect(conn_id)
+        raise
     stop = asyncio.Event()
 
     async def _recheck() -> str | None:

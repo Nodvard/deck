@@ -406,6 +406,7 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
 
   it("fragt vor dem Entfernen einer Verbindung nach und entfernt sie danach", async () => {
     let deleted = false;
+    const order: string[] = [];
     const conn = { name: "pve2", base_url: "https://x:8006", token_id: "t", tls_insecure_skip_verify: false, enabled: true, has_token: true };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
@@ -414,19 +415,141 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
       if (url.endsWith("/ext/proxmox/connections") && method === "GET") {
         return new Response(JSON.stringify(deleted ? [] : [conn]), { status: 200 });
       }
+      if (url.endsWith("/extensions/proxmox/secrets?label=proxmox-token%3Apve2") && method === "DELETE") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        order.push(body.current_password ? "token-mit-passwort" : "token");
+        if (!body.current_password) {
+          return new Response(JSON.stringify({ detail: "Bitte Passwort.", code: "confirm_required", two_factor: false }), { status: 403 });
+        }
+        return new Response(null, { status: 204 });
+      }
       if (url.endsWith("/ext/proxmox/connections/pve2") && method === "DELETE") {
+        order.push("verbindung");
         deleted = true;
         return new Response(null, { status: 204 });
       }
       throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
+    window.__nodvardDeck.confirmIdentity = vi.fn().mockResolvedValue({ current_password: "pw" });
     render(<ProxmoxNodePage />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Entfernen" }));
 
     await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("pve2"), expect.anything()));
     await waitFor(() => expect(deleted).toBe(true));
+    expect(order).toEqual(["token", "token-mit-passwort", "verbindung"]);
+  });
+
+  it("Name mit Leerzeichen am Ende: Umschalten und Entfernen treffen genau diese Verbindung, nicht die gleichnamige", async () => {
+    const calls: string[] = [];
+    const base = { base_url: "https://x:8006", token_id: "t", tls_insecure_skip_verify: false, enabled: true, has_token: true };
+    const conns = [{ ...base, name: "pve1 " }, { ...base, name: "pve1" }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/hosts?tag=proxmox")) return new Response(JSON.stringify([]), { status: 200 });
+      if (url.endsWith("/ext/proxmox/connections") && method === "GET") return new Response(JSON.stringify(conns), { status: 200 });
+      if (method !== "GET") {
+        calls.push(`${method} ${url.replace(/^.*\/api\/v1/, "")}`);
+        return method === "PUT" ? new Response(JSON.stringify(conns[0]), { status: 200 }) : new Response(null, { status: 204 });
+      }
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProxmoxNodePage />);
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "aktiv" }))[0]);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    fireEvent.click((await screen.findAllByRole("button", { name: "Entfernen" }))[0]);
+    await waitFor(() => expect(calls).toHaveLength(3));
+
+    expect(calls).toEqual([
+      "PUT /ext/proxmox/connections/pve1%20",
+      "DELETE /extensions/proxmox/secrets?label=proxmox-token%3Apve1%20",
+      "DELETE /ext/proxmox/connections/pve1%20",
+    ]);
+  });
+
+  it("sagt, wenn das Token schon gelöscht ist, die Verbindung aber stehen blieb", async () => {
+    let tokenDropped = false;
+    let readsAfterDrop = 0;
+    const order: string[] = [];
+    const conn = { name: "pve2", base_url: "https://x:8006", token_id: "t", tls_insecure_skip_verify: false, enabled: true, has_token: true };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/hosts?tag=proxmox")) return new Response(JSON.stringify([]), { status: 200 });
+      if (url.endsWith("/ext/proxmox/connections") && method === "GET") {
+        if (tokenDropped) readsAfterDrop += 1;
+        return new Response(JSON.stringify([{ ...conn, has_token: !tokenDropped }]), { status: 200 });
+      }
+      if (url.endsWith("/extensions/proxmox/secrets?label=proxmox-token%3Apve2") && method === "DELETE") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        order.push(body.current_password ? "token-mit-passwort" : "token");
+        if (!body.current_password) {
+          return new Response(JSON.stringify({ detail: "Bitte Passwort.", code: "confirm_required", two_factor: false }), { status: 403 });
+        }
+        tokenDropped = true;
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/ext/proxmox/connections/pve2") && method === "DELETE") {
+        order.push("verbindung");
+        return new Response(JSON.stringify({ detail: "Speichern fehlgeschlagen." }), { status: 500 });
+      }
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.__nodvardDeck.confirmIdentity = vi.fn().mockResolvedValue({ current_password: "pw" });
+    render(<ProxmoxNodePage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Entfernen" }));
+
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("pve2"), expect.anything()));
+    expect(await screen.findByText(/Das Token ist gelöscht, die Verbindung aber noch da: Speichern fehlgeschlagen/)).toBeInTheDocument();
+    expect(order).toEqual(["token", "token-mit-passwort", "verbindung"]);
+    await waitFor(() => expect(readsAfterDrop).toBeGreaterThan(0));
+    const row = (await screen.findByText("fehlt")).closest("tr");
+    expect(row?.textContent).toContain("pve2");
+    expect(screen.getByRole("button", { name: "Token setzen" })).toBeInTheDocument();
+  });
+
+  it("lässt die Verbindung stehen, wenn die Passwort-Rückfrage zum Token abgebrochen wird", async () => {
+    let deleted = false;
+    const order: string[] = [];
+    const conn = { name: "pve2", base_url: "https://x:8006", token_id: "t", tls_insecure_skip_verify: false, enabled: true, has_token: true };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/hosts?tag=proxmox")) return new Response(JSON.stringify([]), { status: 200 });
+      if (url.endsWith("/ext/proxmox/connections") && method === "GET") {
+        return new Response(JSON.stringify(deleted ? [] : [conn]), { status: 200 });
+      }
+      if (url.endsWith("/extensions/proxmox/secrets?label=proxmox-token%3Apve2") && method === "DELETE") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        order.push(body.current_password ? "token-mit-passwort" : "token");
+        if (!body.current_password) {
+          return new Response(JSON.stringify({ detail: "Bitte Passwort.", code: "confirm_required", two_factor: false }), { status: 403 });
+        }
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/ext/proxmox/connections/pve2") && method === "DELETE") {
+        order.push("verbindung");
+        deleted = true;
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.__nodvardDeck.confirmIdentity = vi.fn().mockResolvedValue(null);
+    render(<ProxmoxNodePage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Entfernen" }));
+
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("pve2"), expect.anything()));
+    await waitFor(() => expect(order).toEqual(["token"]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(deleted).toBe(false);
   });
 
   it("Alte Tokens: Liste mit dem Befehl zum Löschen, Nodvard Deck selbst löscht nichts", async () => {
@@ -654,6 +777,28 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     expect(pool.textContent).toContain("3 Backups (17 GB)");
     expect(pool.textContent).toContain("46.4 %");
     expect(within(pool).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "46.4");
+  });
+
+  it.each([false, true])("Speicher: nicht erreichbar ohne irreführende Belegung (alte Zahlen: %s)", async (stale) => {
+    const fetchMock = richFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fetchMock(input, init);
+      if (!input.toString().endsWith("/ext/proxmox/storage")) return response;
+      const data = await response.json();
+      Object.assign(data.pools[0], {
+        active: false, used_percent: null, tone: "danger",
+        used: stale ? 46 * 1024 ** 3 : null, total: stale ? 100 * 1024 ** 3 : null,
+      });
+      return new Response(JSON.stringify(data), { status: 200 });
+    }));
+    render(<ProxmoxNodePage />);
+    await screen.findByTestId("pool-local");
+    expect(screen.getByTestId("tile-storage")).toHaveTextContent("local (pve2) nicht erreichbar");
+    fireEvent.click(screen.getByRole("tab", { name: "Speicher" }));
+    const pool = screen.getByTestId("pool-local");
+    expect(within(pool).getByText("nicht erreichbar")).toHaveClass("text-red-300");
+    expect(within(pool).queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(pool.textContent).not.toMatch(/0 B \/ 0 B|46 GB \/ 100 GB/);
   });
 
   it("Snapshots: aufklappen, zurueckrollen geht mit Rueckfrage ueber den Aktionsweg", async () => {

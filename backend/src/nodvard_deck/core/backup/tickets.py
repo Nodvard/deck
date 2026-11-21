@@ -11,7 +11,8 @@ from pathlib import Path
 
 # Der Download ist ein normaler Browser-Download ohne Authorization-Header. Das Ticket ist zufällig (256 Bit), liegt nur im
 # Prozessspeicher, gilt fünf Minuten ab dem Moment, in dem die Datei fertig ist, und wird beim Einlösen entfernt, auch
-# abgelaufen. Der Download-Endpunkt löst es nur ein, solange sein Nutzer noch aktiver Owner ist.
+# abgelaufen. Der Download-Endpunkt löst es nur ein, solange sein Nutzer noch aktiver Owner ist und die ausstellende
+# Anmeldung samt Passwort noch gilt.
 TICKET_TTL_S = 300.0
 
 
@@ -23,6 +24,10 @@ class DownloadTicket:
     filename: str
     delete_after: bool
     created_at: float
+    login_id: str | None = None
+    """Anmeldung (`sid`), die das Ticket ausgestellt hat; endet sie, gilt das Ticket nicht mehr."""
+    stamp: str = ""
+    """Fingerabdruck des Passworts beim Ausstellen (`session_guard.credential_stamp`)."""
     job_id: str = field(default_factory=lambda: secrets.token_urlsafe(16))
     """Nur zum Abfragen des Stands, nie zum Herunterladen: Sie steht in jeder Abfrage-Adresse (Zugriffsprotokoll)."""
     status: str = "building"
@@ -44,11 +49,14 @@ class DownloadTicketRegistry:
         self._jobs: dict[str, str] = {}
         """job_id -> Ticket."""
 
-    def create(self, *, user_id: str, path: Path, filename: str, delete_after: bool, ready: bool) -> DownloadTicket:
+    def create(
+        self, *, user_id: str, path: Path, filename: str, delete_after: bool, ready: bool,
+        login_id: str | None = None, stamp: str = "",
+    ) -> DownloadTicket:
         now = time.monotonic()
         ticket = DownloadTicket(
             ticket=secrets.token_urlsafe(32), user_id=user_id, path=path, filename=filename,
-            delete_after=delete_after, created_at=now,
+            delete_after=delete_after, created_at=now, login_id=login_id, stamp=stamp,
         )
         if ready:
             ticket.status, ticket.ready_at = "ready", now

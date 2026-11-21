@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -13,6 +14,12 @@ logger = logging.getLogger("nodvard_deck.ws")
 
 # Ein Client, der nicht mehr liest, darf die Zustellung an die anderen nicht aufhalten.
 SEND_TIMEOUT_S = 5.0
+MAX_CONNECTIONS_PER_USER = 20
+"""Mehr gleichzeitige Live-Verbindungen eines Kontos lehnt der Hub ab (jeder offene Tab braucht eine)."""
+
+
+class ConnectionLimitReached(Exception):
+    """Das Konto hat schon `MAX_CONNECTIONS_PER_USER` offene Verbindungen."""
 
 
 class _SendsJson(Protocol):
@@ -42,6 +49,8 @@ class WsHub:
         # HTTP leitet Rechte bei jedem Request frisch aus der Datenbank ab, WS soll keine zweite Quelle der Wahrheit
         # haben. `api/v1/ws.py` frischt ihn alle 30 s auf (`set_permissions`); deaktivierte oder abgemeldete Konten
         # verlieren die Verbindung.
+        if sum(1 for c in self._connections.values() if c.user_id == user_id) >= MAX_CONNECTIONS_PER_USER:
+            raise ConnectionLimitReached(user_id)
         conn_id = self._next_id
         self._next_id += 1
         self._connections[conn_id] = _Connection(socket=socket, user_id=user_id, permissions=list(permissions or []))
@@ -77,33 +86,57 @@ class WsHub:
         required_permission: str | None = None,
         reduced_payload: dict[str, Any] | None = None,
         full_permission: str | None = None,
+        audience: Callable[[str, list[str]], bool] | None = None,
     ) -> None:
         """Verteilt `payload` an alle Verbindungen, die den Kanal abonniert haben und `required_permission` erfüllen.
         Ohne die Berechtigung bleibt ein Client abonniert, bekommt aber diese Nachricht nicht (ohne `full_permission` die
-        gekürzte `reduced_payload`); ein toter Socket stoppt weder andere Empfänger noch den Aufrufer."""
+        gekürzte `reduced_payload`); `audience(user_id, permissions)` grenzt die Empfänger weiter ein. Ein toter Socket
+        stoppt weder andere Empfänger noch den Aufrufer."""
         full = {"type": "event", "channel": channel, "payload": payload}
         reduced = (
             {"type": "event", "channel": channel, "payload": reduced_payload}
             if reduced_payload is not None and full_permission is not None
             else full
         )
-        for conn_id, conn in list(self._connections.items()):
+
+        def message_for(conn: _Connection) -> dict[str, Any] | None:
             if channel not in conn.channels:
-                continue
+                return None
             if required_permission is not None and not has_permission(conn.permissions, required_permission):
-                continue
-            message = full
+                return None
+            if audience is not None and not audience(conn.user_id, conn.permissions):
+                return None
             if reduced is not full and not has_permission(conn.permissions, full_permission):  # type: ignore[arg-type]
-                message = reduced
-            try:
-                async with asyncio.timeout(SEND_TIMEOUT_S):
-                    await conn.socket.send_json(message)
-            except TimeoutError:
-                logger.warning("ws_hub_send_failed conn_id=%s channel=%s reason=timeout", conn_id, channel)
-                self.disconnect(conn_id)
-                await self._close_quietly(conn.socket)
-            except Exception:  # noqa: BLE001
-                logger.warning("ws_hub_send_failed conn_id=%s channel=%s", conn_id, channel)
+                return reduced
+            return full
+
+        deliveries = [
+            self._deliver(conn_id, channel, message_for)
+            for conn_id, conn in list(self._connections.items())
+            if channel in conn.channels
+        ]
+        # Gleichzeitig, damit eine hängende Verbindung die anderen nicht aufhält.
+        await asyncio.gather(*deliveries)
+
+    async def _deliver(
+        self, conn_id: int, channel: str, message_for: Callable[[_Connection], dict[str, Any] | None]
+    ) -> None:
+        # Erst hier entscheiden: Bis die Zustellung läuft, können sich Rechte und Abonnements schon geändert haben.
+        conn = self._connections.get(conn_id)
+        if conn is None:
+            return
+        message = message_for(conn)
+        if message is None:
+            return
+        try:
+            async with asyncio.timeout(SEND_TIMEOUT_S):
+                await conn.socket.send_json(message)
+        except TimeoutError:
+            logger.warning("ws_hub_send_failed conn_id=%s channel=%s reason=timeout", conn_id, channel)
+            self.disconnect(conn_id)
+            await self._close_quietly(conn.socket)
+        except Exception:  # noqa: BLE001
+            logger.warning("ws_hub_send_failed conn_id=%s channel=%s", conn_id, channel)
 
     @staticmethod
     async def _close_quietly(socket: _SendsJson) -> None:

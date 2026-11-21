@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from nodvard_sdk import Notification, Severity
 
+from .capabilities import _job_ref, _parse_job_ref
 from .schedule import schedule_gap_days
 
 if TYPE_CHECKING:
@@ -41,18 +42,103 @@ AGE_RUNNING_MAX_SECONDS = 24 * 3600
 # erfolgreicher Lauf im Verlauf wirkt sofort.
 INVENTORY_CACHE_SECONDS = 3 * 3600
 AGE_KEY = "age:"
-"""Präfix der Zustandseinträge "Backup zu alt" (`age:<Verbindung>--<VMID>`). Der Eintrag eines Jobs beginnt mit dem
-Verbindungsnamen, der kein ":" enthalten darf; die beiden Arten verwechseln sich also nie."""
+"""Präfix der Zustandseinträge "Backup zu alt" (`age_key`). Der Schlüssel eines Jobs ist seine Referenz und beginnt
+mit "j2"; die beiden Arten verwechseln sich also nie."""
+STATE_VERSION = 2
 AGE_RECOVERED_AFTER_WINDOW = "Die Meldung lag im Wartungsfenster (dort nur im Verlauf, ohne Push)."
 AGE_RECOVERED_IN_WINDOW = "Schon im Wartungsfenster wieder aktuell (dort nur im Verlauf, ohne Push)."
 BACKUPS_PATH = "/ext/backups/backups"
 
 
-def _load(path: Path) -> dict[str, Any]:
+def age_key(connection: str, vmid: str) -> str:
+    return AGE_KEY + _job_ref(connection, "", vmid)
+
+
+def _key_connection(key: str) -> str | None:
+    """Verbindung eines Zustandsschlüssels (Job oder Alter), None bei einem unlesbaren."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return _parse_job_ref(key.removeprefix(AGE_KEY))[0]
+    except ValueError:
+        return None
+
+
+def _load(path: Path) -> dict[str, Any] | None:
+    """Rohinhalt der Zustandsdatei; None, wenn sie fehlt oder kein Objekt enthält."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _from_entries(data: dict[str, Any]) -> dict[str, Any]:
+    state: dict[str, Any] = {}
+    for entry in data.get("jobs") or []:
+        if isinstance(entry, dict) and all(isinstance(entry.get(f), str) for f in ("connection", "job_id", "vmid")):
+            state[_job_ref(entry["connection"], entry["job_id"], entry["vmid"])] = entry.get("state")
+    for entry in data.get("age") or []:
+        if isinstance(entry, dict) and all(isinstance(entry.get(f), str) for f in ("connection", "vmid")):
+            state[age_key(entry["connection"], entry["vmid"])] = entry.get("state")
+    return state
+
+
+def _to_entries(state: dict[str, Any]) -> dict[str, Any]:
+    jobs: list[dict[str, Any]] = []
+    age: list[dict[str, Any]] = []
+    for key, value in state.items():
+        try:
+            if key.startswith(AGE_KEY):
+                connection, _job, vmid = _parse_job_ref(key[len(AGE_KEY):])
+                age.append({"connection": connection, "vmid": vmid, "state": value})
+            else:
+                connection, job_id, vmid = _parse_job_ref(key)
+                jobs.append({"connection": connection, "job_id": job_id, "vmid": vmid, "state": value})
+        except ValueError:
+            continue
+    return {"version": STATE_VERSION, "jobs": jobs, "age": age}
+
+
+def _migrate_legacy(
+    ctx: "ExtensionContext", legacy: dict[str, Any], rows: list[dict[str, Any]], configured: Collection[str] = (),
+) -> dict[str, Any]:
+    """Übersetzt die alte Datei (flache Schlüssel mit „--“) einmalig; Mehrdeutiges wird verworfen und protokolliert."""
+    connections = {str(row["connection"]) for row in rows if row.get("connection")} | {str(c) for c in configured if c}
+    state: dict[str, Any] = {}
+    dropped: list[str] = []
+    for key, value in legacy.items():
+        if key.startswith(AGE_KEY):
+            connection, sep, vmid = key[len(AGE_KEY):].rpartition("--")  # die VMID enthält nie "--"
+            if sep and connection and vmid:
+                state[age_key(connection, vmid)] = value
+            else:
+                dropped.append(key)
+            continue
+        # Gemessen an allen Verbindungen, auch den gerade nicht erreichbaren: trifft mehr als eine, bleibt es offen.
+        candidates: set[tuple[str, str, str]] = set()
+        for connection in connections:
+            job_id, sep, vmid = key[len(connection) + 2:].rpartition("--") if key.startswith(connection + "--") else ("", "", "")
+            if sep and job_id and vmid:
+                candidates.add((connection, job_id, vmid))
+        if not candidates and key.count("--") == 2:
+            candidates.add(tuple(key.split("--")))  # type: ignore[arg-type]
+        if len(candidates) == 1:
+            state[_job_ref(*next(iter(candidates)))] = value
+        else:
+            dropped.append(key)
+    if dropped:
+        ctx.logger.warning("Backup-Wächter: %d alte Zustandseinträge waren nicht eindeutig und wurden verworfen.", len(dropped))
+    return state
+
+
+def _load_state(
+    ctx: "ExtensionContext", path: Path, rows: list[dict[str, Any]], configured: Collection[str] = (),
+) -> dict[str, Any]:
+    data = _load(path)
+    if data is None:
         return {}
+    if data.get("version") == STATE_VERSION:
+        return _from_entries(data)
+    return _migrate_legacy(ctx, data, rows, configured)
 
 
 def _when(epoch: Any) -> str:
@@ -454,7 +540,7 @@ async def _check_age(
         for (conn, vmid), vm in candidates.items():
             if conn in unreachable or _is_skipped(skip, conn, vmid, vm["name"]):
                 continue
-            key = f"{AGE_KEY}{conn}--{vmid}"
+            key = age_key(conn, vmid)
             evaluated.add(key)
             # Als Zeitpunkt zählt der neuere von letztem erfolgreichem VZDump-Lauf und neuester Sicherungsdatei.
             known = [t for t in (vm["task_ok"], files.get((conn, vmid))) if t is not None]
@@ -504,7 +590,7 @@ async def _check_age(
     # "bewusst ohne Backup"), wegräumen, nur nicht, wo wir gerade nicht lesen konnten.
     if not keep_state:
         for key in [k for k in alerted if k.startswith(AGE_KEY) and k not in evaluated]:
-            if key[len(AGE_KEY):].split("--", 1)[0] not in unsure | read_unsure:
+            if _key_connection(key) not in unsure | read_unsure:
                 del alerted[key]
     return sent
 
@@ -526,6 +612,12 @@ async def _failure_cause(ctx: ExtensionContext, provider: ProxmoxBackupProvider,
         return None
 
 
+async def _configured_connections(ctx: "ExtensionContext") -> list[str]:
+    """Namen aller eingerichteten Verbindungen, auch solcher ohne Jobs oder ohne Antwort."""
+    settings = await ctx.settings.get()
+    return [str(c["name"]) for c in settings.get("connections") or [] if isinstance(c, dict) and c.get("name")]
+
+
 async def run_backup_watch(
     ctx: "ExtensionContext", provider: "ProxmoxBackupProvider", inventory_cache: InventoryCache | None = None
 ) -> dict[str, int]:
@@ -535,8 +627,8 @@ async def run_backup_watch(
     # Der Zustand liegt in einer Datei, damit ein Neustart keine Meldungsflut auslöst. "Läuft" und "unbekannt" ändern
     # nichts: ein laufender Wiederholungsversuch ist noch kein "wieder in Ordnung".
     path = Path(str(ctx.data_dir)) / "watch-state.json"
-    alerted: dict[str, Any] = _load(path)
     rows = await provider.list_jobs()
+    alerted = _load_state(ctx, path, rows, await _configured_connections(ctx))
     # Eine nicht erreichbare Verbindung liefert nur eine Platzhalterzeile --
     # ihre Jobs sind nicht weg, nur gerade nicht lesbar.
     unreachable = {row["connection"] for row in rows if row.get("last_status") == "unreachable"}
@@ -558,12 +650,12 @@ async def run_backup_watch(
     # Jobs, die es nicht mehr gibt, vergessen (sonst bliebe ihr Zustand ewig liegen), aber nur auf erreichbaren
     # Verbindungen, sonst käme dieselbe Meldung erneut.
     known = {job["job_ref"] for job in jobs}
-    for key in [k for k in alerted if not k.startswith(AGE_KEY) and k not in known and k.split("--", 1)[0] not in unreachable]:
+    for key in [k for k in alerted if not k.startswith(AGE_KEY) and k not in known and _key_connection(k) not in unreachable]:
         del alerted[key]
     try:
         sent += await _check_age(ctx, provider, alerted, jobs, unreachable, inventory_cache)
     except Exception:  # "zu alt" ist ein Extra: die Fehlschlag-Meldungen und der Zustand dürfen nie darunter leiden
         ctx.logger.warning("Backup-Wächter: Prüfung auf zu alte Sicherungen fehlgeschlagen.", exc_info=True)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(alerted, indent=1, sort_keys=True), encoding="utf-8")
+    path.write_text(json.dumps(_to_entries(alerted), indent=1), encoding="utf-8")
     return {"checked": len(jobs), "notified": sent}

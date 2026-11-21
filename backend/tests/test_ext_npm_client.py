@@ -460,3 +460,62 @@ async def test_npm_missing_password_is_an_auth_error_without_a_request():
     with pytest.raises(NpmAuthError, match="fehlt noch das Passwort"):
         await client.certificates()
     assert http.requests == []
+
+
+@pytest.mark.parametrize(("raw", "expected"), [
+    ("http://host:81//npm//", "http://host:81/npm"),
+    ("http://host:81/npm//api", "http://host:81/npm"),
+    ("http://host:81//", "http://host:81"),
+    ("host//npm/nginx//proxy", "http://host/npm"),
+])
+def test_repeated_slashes_in_the_path_collapse_and_the_path_stays(raw, expected):
+    assert normalize_url(raw, strip_suffixes=("/api",)) == expected
+
+
+@pytest.mark.asyncio
+async def test_login_under_a_subpath_keeps_the_path_without_double_slashes():
+    fake = FakeNpm()
+    base = normalize_url("http://npm.test:81//npm//", strip_suffixes=("/api",))
+
+    def sub(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.startswith("/npm/api/")
+        return fake(httpx.Request(request.method, str(request.url).replace("/npm/api/", "/api/"), headers=request.headers, content=request.content))
+
+    http = FakeHttp(sub)
+    client = NpmClient(http, base_url=base, identity="admin@example.com", password=Password("npm-geheim"), clock=Clock(NOW.timestamp()))
+    await client.certificates()
+    assert http.paths()[0] == "POST /npm/api/tokens"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [502, 503, 504])
+async def test_login_while_npm_is_starting_is_not_a_login_failure(code):
+    client, _, _ = _npm(lambda request: httpx.Response(code, text="<html>Bad Gateway</html>"))
+    with pytest.raises(NpmError, match="startet gerade noch") as exc:
+        await client.certificates()
+    assert not isinstance(exc.value, NpmAuthError)
+    assert "HTTP" not in str(exc.value) and "Anmeldung" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_login_405_points_to_a_wrong_address():
+    client, _, _ = _npm(lambda request: httpx.Response(405, text="Method Not Allowed"))
+    with pytest.raises(NpmError, match="Adresse") as exc:
+        await client.certificates()
+    assert not isinstance(exc.value, NpmAuthError)
+    assert "fehlgeschlagen" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [502, 503, 504])
+async def test_call_after_login_while_npm_restarts_says_starting(code):
+    fake = FakeNpm()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/api/nginx/"):
+            return httpx.Response(code, text="Bad Gateway")
+        return fake(request)
+
+    client, _, _ = _npm(handler)
+    with pytest.raises(NpmError, match="startet gerade noch"):
+        await client.certificates()

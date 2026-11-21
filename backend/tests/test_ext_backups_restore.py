@@ -728,6 +728,46 @@ async def test_failed_proxmox_task_is_reported_honestly_and_nothing_is_changed_a
     assert state["puts"] == []
 
 
+async def _viewer(client, db_session) -> str:
+    from nodvard_deck.core import security
+    from nodvard_deck.models import User
+    from nodvard_deck.services import auth as auth_service
+
+    roles = await auth_service.ensure_builtin_roles(db_session)
+    user = User(username="betrachter", password_hash=security.hash_password("viewer-pass-123"), is_active=True)
+    user.roles.append(roles["viewer"])
+    db_session.add(user)
+    await db_session.commit()
+    login = await client.post("/api/v1/auth/login", json={"username": "betrachter", "password": "viewer-pass-123"})
+    assert login.status_code == 200, login.text
+    return login.json()["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_viewer_does_not_read_the_proxmox_reason_of_a_failed_restore_in_the_audit_log(
+    client, db_session, test_settings, proxmox, monkeypatch
+):
+    base_url, state = proxmox
+    token = await _setup(client, db_session, test_settings, base_url)
+    reason = "command 'vma extract' failed: exit code 133"
+    state["task_script"] = [{"status": "stopped", "exitstatus": reason}]
+    monkeypatch.setattr(_restore_module(), "POLL_INTERVAL_S", 0.01)
+    assert (await _propose_and_approve(client, token, QEMU_BODY))["status"] == "failed"
+    viewer = await _viewer(client, db_session)
+
+    def _entry(rows):
+        return next(e for e in rows if e["action"] == "backups.restore_copy")
+
+    listed = (await client.get("/api/v1/audit", params={"limit": 1000}, headers=_auth(viewer))).json()
+    assert _entry(listed)["detail"]["task_status"] is None and _entry(listed)["output_hidden"] is True
+    exported = (await client.get("/api/v1/audit/export", headers=_auth(viewer))).text
+    assert _entry(map(json.loads, exported.splitlines()))["detail"]["task_status"] is None
+    assert "vma extract" not in json.dumps(listed) and "vma extract" not in exported
+
+    full = (await client.get("/api/v1/audit", params={"limit": 1000}, headers=_auth(token))).json()
+    assert _entry(full)["detail"]["task_status"] == reason
+
+
 @pytest.mark.asyncio
 async def test_restore_still_running_after_the_time_limit_says_so_and_touches_nothing(
     client, db_session, test_settings, proxmox, monkeypatch

@@ -3869,6 +3869,66 @@ var FINDING_CONFIRM_LABEL = {
 };
 var KEPT_FOR_GOOD = "Findet ein Scan dieselbe Datei mit demselben Fund wieder, meldet Shield sie nicht mehr. R\xFCckg\xE4ngig geht das unter \u201EAlle, inkl. erledigt\u201C mit \u201EWieder beachten\u201C.";
 var findingKey = (id, action) => `${id}:${action}`;
+var MANY_IN_FOLDER = 10;
+var FINDINGS_LIST_LIMIT = 200;
+var folderCount = (g, one, many) => `${g.atLeast ? "mindestens " : ""}${count(g.n, one, many)}`;
+var PROTECTED_FOLDERS = /* @__PURE__ */ new Set([
+  "/tmp",
+  "/var/tmp",
+  "/dev/shm",
+  "/run",
+  "/etc",
+  "/root",
+  "/home",
+  "/boot",
+  "/bin",
+  "/sbin",
+  "/usr",
+  "/usr/bin",
+  "/usr/sbin",
+  "/usr/local/bin",
+  "/var/www",
+  "/srv",
+  "/var",
+  "/var/lib",
+  "/var/log",
+  "/var/spool",
+  "/var/mail",
+  "/opt",
+  "/mnt",
+  "/media",
+  "/snap",
+  "/usr/local/sbin",
+  "/proc",
+  "/sys"
+]);
+var PROTECTED_LIB = /^(\/usr)?\/lib(32|64|x32)?$/;
+var isProtectedFolder = (folder) => [folder, folder.slice(0, folder.lastIndexOf("/")) || "/"].some((p) => PROTECTED_FOLDERS.has(p) || PROTECTED_LIB.test(p));
+var isExcludableFolder = (folder) => !folder.includes("*") && !folder.endsWith("/") && !folder.includes("//") && !folder.split("/").some((p) => p === "." || p === "..") && !isProtectedFolder(folder);
+var EXCLUDED_NOTE = /^Der Ordner (.+) ist auf allen Servern von den Scans ausgenommen\.$/;
+function excludedFolder(f) {
+  return f.note?.match(EXCLUDED_NOTE)?.[1] ?? null;
+}
+function crowdedFolders(findings, listed = findings.length) {
+  const atLeast = listed >= FINDINGS_LIST_LIMIT;
+  const groups = /* @__PURE__ */ new Map();
+  for (const f of findings) {
+    const cut = f.path.lastIndexOf("/");
+    if (f.status !== "detected" || cut <= 0) continue;
+    const folder = f.path.slice(0, cut);
+    if (!isExcludableFolder(folder)) continue;
+    const key = `${f.host_id}
+${folder}`;
+    const group = groups.get(key) ?? { host_id: f.host_id, host_name: f.host_name, folder, n: 0, atLeast };
+    group.n += 1;
+    groups.set(key, group);
+  }
+  const crowded = [...groups.values()].filter((g) => g.n >= MANY_IN_FOLDER);
+  for (const g of crowded) {
+    g.n = findings.filter((f) => f.status === "detected" && f.host_id === g.host_id && f.path.startsWith(`${g.folder}/`)).length;
+  }
+  return crowded.sort((a, b) => b.n - a.n);
+}
 function QuarantineTab({ canManage, onChanged }) {
   const page = usePageActions();
   const { keys: { busy }, signal: unmountSignal } = page;
@@ -3911,6 +3971,37 @@ function QuarantineTab({ canManage, onChanged }) {
     load();
     onChanged();
   }
+  async function excludeFolder(g) {
+    const ok = await deck().confirmDialog(
+      `Den Ordner \u201E${g.folder}\u201C samt Unterordnern auf ALLEN Servern von den Scans ausnehmen und die ${folderCount(g, "offenen Fund", "offenen Funde")} auf ${g.host_name} darin schlie\xDFen? Der Ordner wird dann nirgends mehr gepr\xFCft, auch nicht vom Echtzeit-W\xE4chter (der \xFCbernimmt es erst, wenn er neu eingeschaltet wird). Offene Funde in diesem Ordner auf anderen Servern bleiben offen. Zur\xFCck geht es unter Einstellungen, \u201EAusgenommene Ordner\u201C; die geschlossenen Funde \xF6ffnest du bei \u201EIgnoriert\u201C mit \u201EAlle Funde dieses Ordners wieder beachten\u201C oder einzeln mit \u201EWieder beachten\u201C.`,
+      { danger: true, confirmLabel: "Ordner ausnehmen" }
+    );
+    if (!ok) return;
+    const sure = await deck().confirmDialog(
+      `Letzte Frage: Die Ausnahme f\xFCr \u201E${g.folder}\u201C samt Unterordnern gilt auf allen Servern, nicht nur auf ${g.host_name}. Shield pr\xFCft die Rechte des Ordners nur auf ${g.host_name}. Auf den anderen Servern wird nicht gepr\xFCft, ob dort andere Konten in den Ordner schreiben d\xFCrfen. Wirklich f\xFCr alle Server ausnehmen?`,
+      { danger: true, confirmLabel: "Ja, f\xFCr alle Server" }
+    );
+    if (!sure) return;
+    await track(page, `exclude:${g.host_id}:${g.folder}`, `\u201E${g.folder}\u201C`, "Der Ordner wird ausgenommen \u2026", async () => {
+      const done = await call(`${API}/findings/exclude-folder`, { method: "POST", body: JSON.stringify({ host_id: g.host_id, folder: g.folder, all_servers: true }) });
+      return { kind: "ok", text: `ausgenommen, ${count(done.closed, "Fund", "Funde")} geschlossen.` };
+    });
+    load();
+    onChanged();
+  }
+  async function reopenFolder(folder, hostId, hostName) {
+    const ok = await deck().confirmDialog(
+      `Alle Funde in \u201E${folder}\u201C samt Unterordnern auf ${hostName}, die beim Ausnehmen des Ordners geschlossen wurden, wieder als offen beachten? Die Ausnahme selbst bleibt bestehen, bis du sie unter Einstellungen, \u201EAusgenommene Ordner\u201C l\xF6schst. Bis dahin wird der Ordner weiter nicht gescannt.`,
+      { confirmLabel: "Funde wieder beachten" }
+    );
+    if (!ok) return;
+    await track(page, `reopen-folder:${hostId}:${folder}`, `\u201E${folder}\u201C`, "Die Funde werden wieder ge\xF6ffnet \u2026", async () => {
+      const done = await call(`${API}/findings/reopen-folder`, { method: "POST", body: JSON.stringify({ host_id: hostId, folder }) });
+      return { kind: "ok", text: `${count(done.reopened, "Fund", "Funde")} wieder offen.` };
+    });
+    load();
+    onChanged();
+  }
   const failed = loadError ? /* @__PURE__ */ jsx15(LoadError2, { what: "Die Liste der Funde", error: loadError, onRetry: load }) : null;
   if (!items) return failed ?? /* @__PURE__ */ jsx15("p", { className: "text-sm text-white/50", children: "Lade \u2026" });
   if (failed) {
@@ -3926,52 +4017,80 @@ function QuarantineTab({ canManage, onChanged }) {
   if (items.length === 0) {
     return /* @__PURE__ */ jsx15(EmptyState, { icon: "package", title: "Keine Funde", text: "Bisher wurde keine Schadsoftware gefunden. Funde landen hier \u2013 bei aktivierter automatischer Quarant\xE4ne sind sie sofort unsch\xE4dlich gemacht." });
   }
-  return /* @__PURE__ */ jsx15(Fragment8, { children: /* @__PURE__ */ jsx15(
-    Card,
-    {
-      title: "Funde & Quarant\xE4ne",
-      description: "Dateien in Quarant\xE4ne sind unlesbar und nicht ausf\xFChrbar (Rechte 000) im Tresor auf dem Server, auf dem sie gefunden wurden.",
-      padded: false,
-      actions: /* @__PURE__ */ jsxs14("select", { "aria-label": "Filter", value: filter, onChange: (e) => setFilter(e.target.value), className: `${inputClass} w-auto py-1 text-xs`, children: [
-        /* @__PURE__ */ jsx15("option", { value: "active", children: "Offen & in Quarant\xE4ne" }),
-        /* @__PURE__ */ jsx15("option", { value: "all", children: "Alle, inkl. erledigt" })
+  const mayExclude = canManage && deck().hasPermission("hosts.execute") && deck().hasPermission("extensions.manage");
+  const crowded = mayExclude ? crowdedFolders(hostItems, items.length) : [];
+  const reopenShown = /* @__PURE__ */ new Set();
+  const reopenFolderOffer = (f) => {
+    const folder = f.status === "ignored" ? excludedFolder(f) : null;
+    if (!mayExclude || !folder) return false;
+    const key = `${f.host_id}
+${folder}`;
+    if (reopenShown.has(key)) return false;
+    reopenShown.add(key);
+    return true;
+  };
+  return /* @__PURE__ */ jsxs14(Fragment8, { children: [
+    crowded.map((g) => /* @__PURE__ */ jsxs14(Card, { title: `${folderCount(g, "Fund", "Funde")} in einem Ordner`, className: "mb-4", children: [
+      /* @__PURE__ */ jsxs14("p", { className: "text-sm text-amber-200/90", "data-testid": "crowded-folder", children: [
+        "Auf ",
+        g.host_name,
+        " sind ",
+        g.atLeast ? "mindestens " : "",
+        g.n.toLocaleString("de-DE"),
+        " Funde in \u201E",
+        g.folder,
+        "\u201C samt Unterordnern offen. Liegt dort Archivmaterial, etwa eine Sammlung von Testdateien oder Exploits, kannst du den Ordner unter \u201EAusgenommene Ordner\u201C eintragen. Dann wird er auf allen Servern nicht mehr gescannt. Pr\xFCfe vorher, ob die Dateien wirklich harmlos sind: Auch ein echter Befall kann viele Funde in einem Ordner haben."
       ] }),
-      children: /* @__PURE__ */ jsxs14("ul", { className: "divide-y divide-white/[0.05]", "data-testid": "findings", children: [
-        visible.length === 0 && /* @__PURE__ */ jsx15("li", { className: "px-5 py-6 text-sm text-white/50", children: "Nichts offen." }),
-        visible.map((f) => {
-          const st = FINDING_STATUS[f.status] ?? { label: f.status, tone: "neutral" };
-          const running = FINDING_ACTIONS.find((a) => busy.has(findingKey(f.id, a)));
-          const label = (action, text) => running === action ? FINDING_RUNNING_LABEL[action] : text;
-          return /* @__PURE__ */ jsxs14("li", { className: "flex flex-wrap items-center gap-3 px-5 py-3 text-sm", children: [
-            /* @__PURE__ */ jsxs14("div", { className: "min-w-0 flex-[1_1_14rem]", "data-testid": `finding-text-${f.id}`, children: [
-              /* @__PURE__ */ jsxs14("p", { className: "flex flex-wrap items-center gap-2", children: [
-                /* @__PURE__ */ jsx15(Badge, { tone: st.tone, children: st.label }),
-                /* @__PURE__ */ jsx15("span", { className: "font-medium text-red-200", children: f.signature })
+      /* @__PURE__ */ jsx15("div", { className: "mt-2", children: /* @__PURE__ */ jsx15(Button, { small: true, disabled: busy.has(`exclude:${g.host_id}:${g.folder}`), onClick: () => void excludeFolder(g), children: "Ordner ausnehmen und Funde schlie\xDFen" }) })
+    ] }, `${g.host_id}${g.folder}`)),
+    /* @__PURE__ */ jsx15(
+      Card,
+      {
+        title: "Funde & Quarant\xE4ne",
+        description: "Dateien in Quarant\xE4ne sind unlesbar und nicht ausf\xFChrbar (Rechte 000) im Tresor auf dem Server, auf dem sie gefunden wurden.",
+        padded: false,
+        actions: /* @__PURE__ */ jsxs14("select", { "aria-label": "Filter", value: filter, onChange: (e) => setFilter(e.target.value), className: `${inputClass} w-auto py-1 text-xs`, children: [
+          /* @__PURE__ */ jsx15("option", { value: "active", children: "Offen & in Quarant\xE4ne" }),
+          /* @__PURE__ */ jsx15("option", { value: "all", children: "Alle, inkl. erledigt" })
+        ] }),
+        children: /* @__PURE__ */ jsxs14("ul", { className: "divide-y divide-white/[0.05]", "data-testid": "findings", children: [
+          visible.length === 0 && /* @__PURE__ */ jsx15("li", { className: "px-5 py-6 text-sm text-white/50", children: "Nichts offen." }),
+          visible.map((f) => {
+            const st = FINDING_STATUS[f.status] ?? { label: f.status, tone: "neutral" };
+            const running = FINDING_ACTIONS.find((a) => busy.has(findingKey(f.id, a)));
+            const label = (action, text) => running === action ? FINDING_RUNNING_LABEL[action] : text;
+            return /* @__PURE__ */ jsxs14("li", { className: "flex flex-wrap items-center gap-3 px-5 py-3 text-sm", children: [
+              /* @__PURE__ */ jsxs14("div", { className: "min-w-0 flex-[1_1_14rem]", "data-testid": `finding-text-${f.id}`, children: [
+                /* @__PURE__ */ jsxs14("p", { className: "flex flex-wrap items-center gap-2", children: [
+                  /* @__PURE__ */ jsx15(Badge, { tone: st.tone, children: st.label }),
+                  /* @__PURE__ */ jsx15("span", { className: "font-medium text-red-200", children: f.signature })
+                ] }),
+                /* @__PURE__ */ jsxs14("p", { className: "mt-0.5 truncate font-mono text-xs text-white/70", children: [
+                  f.host_name,
+                  ": ",
+                  f.path
+                ] }),
+                /* @__PURE__ */ jsxs14("p", { className: "text-xs text-white/40", children: [
+                  "gefunden ",
+                  when(f.detected_at),
+                  f.status_changed_at ? ` \xB7 ge\xE4ndert ${when(f.status_changed_at)}` : ""
+                ] }),
+                f.note && /* @__PURE__ */ jsx15("p", { className: "break-words text-xs text-amber-300", children: f.note }),
+                reopenFolderOffer(f) && /* @__PURE__ */ jsx15("p", { className: "mt-1", children: /* @__PURE__ */ jsx15(Button, { small: true, disabled: busy.has(`reopen-folder:${f.host_id}:${excludedFolder(f)}`), onClick: () => void reopenFolder(excludedFolder(f), f.host_id, f.host_name), children: "Alle Funde dieses Ordners wieder beachten" }) })
               ] }),
-              /* @__PURE__ */ jsxs14("p", { className: "mt-0.5 truncate font-mono text-xs text-white/70", children: [
-                f.host_name,
-                ": ",
-                f.path
-              ] }),
-              /* @__PURE__ */ jsxs14("p", { className: "text-xs text-white/40", children: [
-                "gefunden ",
-                when(f.detected_at),
-                f.status_changed_at ? ` \xB7 ge\xE4ndert ${when(f.status_changed_at)}` : ""
-              ] }),
-              f.note && /* @__PURE__ */ jsx15("p", { className: "break-words text-xs text-amber-300", children: f.note })
-            ] }),
-            canManage && /* @__PURE__ */ jsxs14("div", { className: "flex gap-1", children: [
-              f.status === "detected" && /* @__PURE__ */ jsx15(Button, { small: true, variant: "primary", disabled: !!running, onClick: () => void act(f, "quarantine"), children: label("quarantine", "In Quarant\xE4ne") }),
-              f.status === "detected" && /* @__PURE__ */ jsx15(Button, { small: true, variant: "ghost", disabled: !!running, onClick: () => void act(f, "ignore"), children: label("ignore", "Ignorieren") }),
-              f.status === "quarantined" && /* @__PURE__ */ jsx15(Button, { small: true, disabled: !!running, onClick: () => void act(f, "restore"), children: label("restore", "Wiederherstellen") }),
-              f.status === "quarantined" && /* @__PURE__ */ jsx15(Button, { small: true, variant: "danger", disabled: !!running, onClick: () => void act(f, "delete"), children: label("delete", "Endg\xFCltig l\xF6schen") }),
-              (f.status === "ignored" || f.status === "restored") && /* @__PURE__ */ jsx15(Button, { small: true, variant: "ghost", disabled: !!running, onClick: () => void act(f, "reopen"), children: label("reopen", "Wieder beachten") })
-            ] })
-          ] }, f.id);
-        })
-      ] })
-    }
-  ) });
+              canManage && /* @__PURE__ */ jsxs14("div", { className: "flex gap-1", children: [
+                f.status === "detected" && /* @__PURE__ */ jsx15(Button, { small: true, variant: "primary", disabled: !!running, onClick: () => void act(f, "quarantine"), children: label("quarantine", "In Quarant\xE4ne") }),
+                f.status === "detected" && /* @__PURE__ */ jsx15(Button, { small: true, variant: "ghost", disabled: !!running, onClick: () => void act(f, "ignore"), children: label("ignore", "Ignorieren") }),
+                f.status === "quarantined" && /* @__PURE__ */ jsx15(Button, { small: true, disabled: !!running, onClick: () => void act(f, "restore"), children: label("restore", "Wiederherstellen") }),
+                f.status === "quarantined" && /* @__PURE__ */ jsx15(Button, { small: true, variant: "danger", disabled: !!running, onClick: () => void act(f, "delete"), children: label("delete", "Endg\xFCltig l\xF6schen") }),
+                (f.status === "ignored" || f.status === "restored") && /* @__PURE__ */ jsx15(Button, { small: true, variant: "ghost", disabled: !!running, onClick: () => void act(f, "reopen"), children: label("reopen", "Wieder beachten") })
+              ] })
+            ] }, f.id);
+          })
+        ] })
+      }
+    )
+  ] });
 }
 function HardeningTab({ canManage, hosts, onAudit }) {
   const hostFilter = useContext4(HostFilter);

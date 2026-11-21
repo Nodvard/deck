@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from nodvard_sdk import BackupProvider, ServiceCatalog
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import (
@@ -27,6 +27,8 @@ from ...ext.runtime import get_extension_runtime
 from ...models import Action, Notification
 from ...services import custom_apps as custom_apps_service
 from ...services import helper_hints as helper_hints_service
+from ...services import notifications as notifications_service
+from ...services.actor_labels import may_see_other_users
 from ..responses import error_responses
 from ..deps import CurrentUser, SessionDep, require_permission
 from .host_access import root_helpers_for, root_needs_helpers_only
@@ -309,6 +311,8 @@ async def overview(session: SessionDep, user: CurrentUser) -> OverviewOut:
     expensive = await _expensive_part()
     pending = (await session.execute(select(func.count()).select_from(Action).where(Action.status == "proposed"))).scalar_one()
     unread_filter = Notification.read_at.is_(None)
+    if not may_see_other_users(user):
+        unread_filter = and_(unread_filter, notifications_service.own_accounts_only(user.id))
     unread = (await session.execute(select(func.count()).select_from(Notification).where(unread_filter))).scalar_one()
     attention_rows = (await session.execute(
         select(Notification)

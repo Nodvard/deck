@@ -1160,6 +1160,62 @@ const KEPT_FOR_GOOD = "Findet ein Scan dieselbe Datei mit demselben Fund wieder,
 
 const findingKey = (id: string, action: FindingAction) => `${id}:${action}`;
 
+// Ab so vielen offenen Funden in einem Ordner liegt eher Archivmaterial als ein Befall nahe (zum Beispiel die
+// Exploit-Sammlung von Kali Linux).
+const MANY_IN_FOLDER = 10;
+
+// So viele Funde liefert die Liste höchstens (Vorgabe im Backend); danach sind alle Zahlen hier nur Untergrenzen.
+const FINDINGS_LIST_LIMIT = 200;
+
+interface CrowdedFolder { host_id: string; host_name: string; folder: string; n: number; atLeast: boolean }
+
+const folderCount = (g: CrowdedFolder, one: string, many: string) => `${g.atLeast ? "mindestens " : ""}${count(g.n, one, many)}`;
+
+const PROTECTED_FOLDERS = new Set([
+  "/tmp", "/var/tmp", "/dev/shm", "/run", "/etc", "/root", "/home", "/boot", "/bin", "/sbin", "/usr",
+  "/usr/bin", "/usr/sbin", "/usr/local/bin", "/var/www", "/srv",
+  "/var", "/var/lib", "/var/log", "/var/spool", "/var/mail", "/opt", "/mnt", "/media", "/snap",
+  "/usr/local/sbin", "/proc", "/sys",
+]);
+const PROTECTED_LIB = /^(\/usr)?\/lib(32|64|x32)?$/;
+
+/** Systemordner und ihre direkten Unterordner nimmt Shield nie per Klick aus (gleiche Liste wie im Backend). */
+const isProtectedFolder = (folder: string) =>
+  [folder, folder.slice(0, folder.lastIndexOf("/")) || "/"].some((p) => PROTECTED_FOLDERS.has(p) || PROTECTED_LIB.test(p));
+
+/** Nur Pfade in Normalform ohne Sternchen lassen sich ausnehmen, sonst gälte beim Scan ein anderer Ordner. */
+const isExcludableFolder = (folder: string) =>
+  !folder.includes("*") && !folder.endsWith("/") && !folder.includes("//") && !folder.split("/").some((p) => p === "." || p === "..")
+  && !isProtectedFolder(folder);
+
+const EXCLUDED_NOTE = /^Der Ordner (.+) ist auf allen Servern von den Scans ausgenommen\.$/;
+
+function excludedFolder(f: { note?: string | null }): string | null {
+  return f.note?.match(EXCLUDED_NOTE)?.[1] ?? null;
+}
+
+/** Ordner, in denen je Server viele Funde offen sind, der größte zuerst. */
+function crowdedFolders(findings: Finding[], listed: number = findings.length): CrowdedFolder[] {
+  const atLeast = listed >= FINDINGS_LIST_LIMIT;
+  const groups = new Map<string, CrowdedFolder>();
+  for (const f of findings) {
+    const cut = f.path.lastIndexOf("/");
+    if (f.status !== "detected" || cut <= 0) continue;
+    const folder = f.path.slice(0, cut);
+    if (!isExcludableFolder(folder)) continue;
+    const key = `${f.host_id}\n${folder}`;
+    const group = groups.get(key) ?? { host_id: f.host_id, host_name: f.host_name, folder, n: 0, atLeast };
+    group.n += 1;
+    groups.set(key, group);
+  }
+  const crowded = [...groups.values()].filter((g) => g.n >= MANY_IN_FOLDER);
+  // Geschlossen wird alles darunter, Unterordner eingeschlossen: Die Zahl in der Rückfrage zählt es mit.
+  for (const g of crowded) {
+    g.n = findings.filter((f) => f.status === "detected" && f.host_id === g.host_id && f.path.startsWith(`${g.folder}/`)).length;
+  }
+  return crowded.sort((a, b) => b.n - a.n);
+}
+
 function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged: () => void }) {
   const page = usePageActions();
   const { keys: { busy }, signal: unmountSignal } = page;
@@ -1203,6 +1259,43 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
     onChanged();
   }
 
+  async function excludeFolder(g: CrowdedFolder) {
+    const ok = await deck().confirmDialog(
+      `Den Ordner „${g.folder}“ samt Unterordnern auf ALLEN Servern von den Scans ausnehmen und die ${folderCount(g, "offenen Fund", "offenen Funde")} auf ${g.host_name} darin schließen? `
+      + "Der Ordner wird dann nirgends mehr geprüft, auch nicht vom Echtzeit-Wächter (der übernimmt es erst, wenn er neu eingeschaltet wird). "
+      + "Offene Funde in diesem Ordner auf anderen Servern bleiben offen. Zurück geht es unter Einstellungen, „Ausgenommene Ordner“; "
+      + "die geschlossenen Funde öffnest du bei „Ignoriert“ mit „Alle Funde dieses Ordners wieder beachten“ oder einzeln mit „Wieder beachten“.",
+      { danger: true, confirmLabel: "Ordner ausnehmen" },
+    );
+    if (!ok) return;
+    const sure = await deck().confirmDialog(
+      `Letzte Frage: Die Ausnahme für „${g.folder}“ samt Unterordnern gilt auf allen Servern, nicht nur auf ${g.host_name}. Shield prüft die Rechte des Ordners nur auf ${g.host_name}. Auf den anderen Servern wird nicht geprüft, ob dort andere Konten in den Ordner schreiben dürfen. Wirklich für alle Server ausnehmen?`,
+      { danger: true, confirmLabel: "Ja, für alle Server" },
+    );
+    if (!sure) return;
+    await track(page, `exclude:${g.host_id}:${g.folder}`, `„${g.folder}“`, "Der Ordner wird ausgenommen …", async (): Promise<ActionResult> => {
+      const done = await call<{ closed: number }>(`${API}/findings/exclude-folder`, { method: "POST", body: JSON.stringify({ host_id: g.host_id, folder: g.folder, all_servers: true }) });
+      return { kind: "ok", text: `ausgenommen, ${count(done.closed, "Fund", "Funde")} geschlossen.` };
+    });
+    load();
+    onChanged();
+  }
+
+  async function reopenFolder(folder: string, hostId: string, hostName: string) {
+    const ok = await deck().confirmDialog(
+      `Alle Funde in „${folder}“ samt Unterordnern auf ${hostName}, die beim Ausnehmen des Ordners geschlossen wurden, wieder als offen beachten? `
+      + "Die Ausnahme selbst bleibt bestehen, bis du sie unter Einstellungen, „Ausgenommene Ordner“ löschst. Bis dahin wird der Ordner weiter nicht gescannt.",
+      { confirmLabel: "Funde wieder beachten" },
+    );
+    if (!ok) return;
+    await track(page, `reopen-folder:${hostId}:${folder}`, `„${folder}“`, "Die Funde werden wieder geöffnet …", async (): Promise<ActionResult> => {
+      const done = await call<{ reopened: number }>(`${API}/findings/reopen-folder`, { method: "POST", body: JSON.stringify({ host_id: hostId, folder }) });
+      return { kind: "ok", text: `${count(done.reopened, "Fund", "Funde")} wieder offen.` };
+    });
+    load();
+    onChanged();
+  }
+
   const failed = loadError ? <LoadError what="Die Liste der Funde" error={loadError} onRetry={load} /> : null;
   if (!items) return failed ?? <p className="text-sm text-white/50">Lade …</p>;
   if (failed) {
@@ -1212,8 +1305,32 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
   if (items.length === 0) {
     return <EmptyState icon="package" title="Keine Funde" text="Bisher wurde keine Schadsoftware gefunden. Funde landen hier – bei aktivierter automatischer Quarantäne sind sie sofort unschädlich gemacht." />;
   }
+  const mayExclude = canManage && deck().hasPermission("hosts.execute") && deck().hasPermission("extensions.manage");
+  const crowded = mayExclude ? crowdedFolders(hostItems, items.length) : [];
+  const reopenShown = new Set<string>();
+  // Der Sammel-Knopf steht nur beim ersten sichtbaren Fund je Ordner und Server.
+  const reopenFolderOffer = (f: Finding): boolean => {
+    const folder = f.status === "ignored" ? excludedFolder(f) : null;
+    if (!mayExclude || !folder) return false;
+    const key = `${f.host_id}\n${folder}`;
+    if (reopenShown.has(key)) return false;
+    reopenShown.add(key);
+    return true;
+  };
   return (
     <>
+      {crowded.map((g) => (
+        <Card key={`${g.host_id}${g.folder}`} title={`${folderCount(g, "Fund", "Funde")} in einem Ordner`} className="mb-4">
+          <p className="text-sm text-amber-200/90" data-testid="crowded-folder">
+            Auf {g.host_name} sind {g.atLeast ? "mindestens " : ""}{g.n.toLocaleString("de-DE")} Funde in „{g.folder}“ samt Unterordnern offen. Liegt dort Archivmaterial, etwa eine
+            Sammlung von Testdateien oder Exploits, kannst du den Ordner unter „Ausgenommene Ordner“ eintragen. Dann wird er auf allen Servern nicht mehr gescannt.
+            Prüfe vorher, ob die Dateien wirklich harmlos sind: Auch ein echter Befall kann viele Funde in einem Ordner haben.
+          </p>
+          <div className="mt-2">
+            <Button small disabled={busy.has(`exclude:${g.host_id}:${g.folder}`)} onClick={() => void excludeFolder(g)}>Ordner ausnehmen und Funde schließen</Button>
+          </div>
+        </Card>
+      ))}
       <Card
         title="Funde & Quarantäne"
         description="Dateien in Quarantäne sind unlesbar und nicht ausführbar (Rechte 000) im Tresor auf dem Server, auf dem sie gefunden wurden."
@@ -1241,6 +1358,9 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
                   <p className="mt-0.5 truncate font-mono text-xs text-white/70">{f.host_name}: {f.path}</p>
                   <p className="text-xs text-white/40">gefunden {when(f.detected_at)}{f.status_changed_at ? ` · geändert ${when(f.status_changed_at)}` : ""}</p>
                   {f.note && <p className="break-words text-xs text-amber-300">{f.note}</p>}
+                  {reopenFolderOffer(f) && (
+                    <p className="mt-1"><Button small disabled={busy.has(`reopen-folder:${f.host_id}:${excludedFolder(f)}`)} onClick={() => void reopenFolder(excludedFolder(f)!, f.host_id, f.host_name)}>Alle Funde dieses Ordners wieder beachten</Button></p>
+                  )}
                 </div>
                 {canManage && (
                   <div className="flex gap-1">

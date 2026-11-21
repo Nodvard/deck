@@ -110,6 +110,10 @@ def test_a_skipped_line_does_not_claim_its_project():
     assert _parse(_line("shop", "/data/compose/3"), _line("shop", "/srv/shop")) == {"shop": "/srv/shop"}
 
 
+def test_a_non_numeric_data_compose_folder_is_a_host_folder():
+    assert _parse(_line("shop", "/data/compose/shop")) == {"shop": "/data/compose/shop"}
+
+
 def test_lines_with_too_few_fields_are_skipped():
     fields = _line("shop", "/srv/shop").split("|")
     older = "|".join(fields[:7])
@@ -274,6 +278,18 @@ async def test_a_timeout_without_an_old_state_reaches_the_caller():
     ctx.exec.answer = result(_line("shop", "/srv/shop"))
     assert await catalog.compose_dirs(host) == {"shop": "/srv/shop"}
     assert len(ctx.exec.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_file_places_stay_empty_when_compose_dirs_cannot_be_read(caplog):
+    host = _host()
+    ctx = _ctx(host, answer=TimeoutError("keine Antwort"))
+
+    with caplog.at_level("WARNING", logger="nodvard_deck.ext.docker"):
+        assert await _places(ctx).places_for_host(host.id) == []
+
+    lines = [r.getMessage() for r in caplog.records if r.name == "nodvard_deck.ext.docker"]
+    assert lines == [f"file_places_failed host={host.id} error=TimeoutError"]
 
 
 @pytest.mark.asyncio

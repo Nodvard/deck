@@ -31,7 +31,7 @@ from .image_apply import (
     LABEL_VERSION,
     LABEL_WORKDIR,
     MAX_FILES,
-    PORTAINER_PREFIX,
+    PORTAINER_DIR_RE,
     PROJECT_RE,
     SERVICE_RE,
     _split_files,
@@ -166,7 +166,7 @@ def _stack(project: str, rows: list[dict[str, str]]) -> Stack:
     first = next((r for r in rows if r.get("working_dir")), rows[0])
     working_dir, raw_files, raw_env = first.get("working_dir", ""), first.get("config_files", ""), first.get("env_files", "")
     version = first.get("version", "")
-    if working_dir.startswith(PORTAINER_PREFIX) or any(f.startswith(PORTAINER_PREFIX) for f in raw_files.split(",")):
+    if PORTAINER_DIR_RE.match(working_dir) or any(PORTAINER_DIR_RE.match(f) for f in raw_files.split(",")):
         return Stack(project, members, working_dir, None, (), "portainer", version, tuple(f for f in raw_files.split(",") if f))
     if not working_dir:
         known_files = tuple(path for raw in (raw_files, raw_env) for path in raw.split(",") if _valid_path(path))
@@ -242,8 +242,15 @@ def stack_state(members: list[Member]) -> str:
     return "stopped" if running == 0 else "running" if running == len(members) else "partial"
 
 
-def has_problem(member: Member) -> bool:
-    return member.state in ("restarting", "dead") or "(unhealthy)" in member.status
+_EXIT_CODE_RE = re.compile(r"^Exited \((\d+)\)")
+
+
+def has_problem(member: Member, *, stack_running: bool = False) -> bool:
+    """Ein beendeter Dienst zählt nur mit Fehlercode und nur, solange der Rest des Stacks läuft; `Exited (0)` ist normal."""
+    if member.state in ("restarting", "dead") or "(unhealthy)" in member.status:
+        return True
+    failed = _EXIT_CODE_RE.match(member.status)
+    return stack_running and member.state == "exited" and failed is not None and failed.group(1) != "0"
 
 
 def stack_out(
@@ -264,7 +271,7 @@ def stack_out(
         "project": stack.project,
         "state": stack_state(stack.members),
         "running": sum(1 for m in stack.members if m.state == "running"),
-        "problems": sum(1 for m in stack.members if has_problem(m)),
+        "problems": sum(1 for m in stack.members if has_problem(m, stack_running=any(x.state == "running" for x in stack.members))),
         "total": len(stack.members),
         "containers": [{"name": m.name, "service": m.service or None, "state": m.state, "status": m.status} for m in stack.members],
         "source": stack.source,

@@ -42,6 +42,7 @@ DOCK_ROUTES = {
     "/api/v1/extensions/{ext_id}/frontend/index.js": {"GET"},
     "/api/v1/extensions/{ext_id}/secrets": {"DELETE", "PUT"},
     "/api/v1/extensions/{ext_id}/settings": {"GET", "PUT"},
+    "/api/v1/extensions/{ext_id}/settings/fingerprint": {"PUT"},
     "/api/v1/extensions/{ext_id}/test": {"POST"},
     "/api/v1/health": {"GET"},
     "/api/v1/hosts": {"GET", "POST"},

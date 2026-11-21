@@ -19,7 +19,6 @@ from nodvard_sdk import (
     ListView,
     PageSpec,
     Refresh,
-    SecretNotOwned,
     StatusGridView,
     WidgetSpec,
     same_target,
@@ -35,8 +34,8 @@ from .capabilities import (
 )
 from .certificate import FIELD as FINGERPRINT_FIELD
 from .certificate import MAX_INPUT as MAX_FINGERPRINT_INPUT
-from .certificate import build_certificate_router, connection_pin, normalize_fingerprint
-from .config import TOKEN_LABEL, build_connector, build_connectors, foreign_secret_text
+from .certificate import build_certificate_router, connection_pin, normalize_fingerprint, tls_weakened
+from .config import TOKEN_LABEL, build_connector, build_connectors, leftover_secret_text, stored_secret_text
 from .connector import ProxmoxApiError
 from .guest_config import collect_guest_details
 from .node_health import collect_disks, collect_node_health, temperature_setting
@@ -117,6 +116,13 @@ class _ConnectionIn(BaseModel):
     tls_insecure_skip_verify: bool = False
     tls_fingerprint_sha256: str | None = Field(default=None, max_length=MAX_FINGERPRINT_INPUT)
     enabled: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("Der Name darf nicht mit einem Leerzeichen beginnen oder enden.")
+        return value
 
     @field_validator("tls_fingerprint_sha256")
     @classmethod
@@ -224,16 +230,10 @@ class Extension(NodvardExtension):
                 )
             await ctx.secrets.create(label=label, kind="generic", value=payload.value)
 
-        async def _drop_secret_or_refuse(label: str) -> None:
-            """Löscht das Geheimnis einer Verbindung; ist es nicht von dieser Erweiterung (etwa von Hand angelegt),
-            bleibt es, und die Anfrage endet mit 409."""
-            foreign = False
-            try:
-                await ctx.secrets.delete(label)
-            except SecretNotOwned:
-                foreign = True
-            if foreign:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=foreign_secret_text(label))
+        async def _refuse_if_stored(label: str) -> None:
+            """Gespeicherte Zugangsdaten löscht oder schwächt nur der Kern, mit Passwort; hier endet es mit 409."""
+            if await ctx.secrets.exists(label):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=stored_secret_text(label))
 
         async def _connection_out(conn: dict[str, Any]) -> _ConnectionOut:
             name = str(conn.get("name") or "")
@@ -269,9 +269,12 @@ class Extension(NodvardExtension):
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Verbindung '{payload.name}' existiert bereits.",
                 )
-            # Eine neue Verbindung startet ohne Token: ein altes unter demselben Namen gehörte zu einer anderen Adresse.
-            # Ein fremdes Geheimnis (etwa von Hand im Tresor) bleibt, dann wird nichts angelegt.
-            await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{payload.name}")
+            # Ein Token unter diesem Namen gehörte zu einer anderen Adresse und gilt nicht für die neue Verbindung.
+            leftover = f"{TOKEN_LABEL}:{payload.name}"
+            if await ctx.secrets.exists(leftover):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail=leftover_secret_text(payload.name, leftover),
+                )
             entry = payload.model_dump()
             if entry.get(FINGERPRINT_FIELD) is None:
                 entry.pop(FINGERPRINT_FIELD, None)
@@ -294,20 +297,20 @@ class Extension(NodvardExtension):
                 if conn.get("name") != name:
                     continue
                 updates = payload.model_dump(exclude_unset=True)
-                old_url = conn.get("base_url")
+                before = dict(conn)
                 conn.update(updates)
                 if FINGERPRINT_FIELD in updates:
                     if updates[FINGERPRINT_FIELD] is None:
                         conn.pop(FINGERPRINT_FIELD, None)
                     elif "tls_insecure_skip_verify" not in updates:
                         conn["tls_insecure_skip_verify"] = False  # der Fingerabdruck ersetzt den Schalter
-                if "base_url" in updates and not same_target(old_url, conn.get("base_url")):
-                    # Das Token gehört zur alten Adresse, sonst ginge es an die neue. Ein fremdes Geheimnis lässt die
-                    # Adresse unverändert.
-                    await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{name}")
-                    if FINGERPRINT_FIELD not in updates:
-                        # Der gemerkte Fingerabdruck gehört zum alten Server.
-                        conn.pop(FINGERPRINT_FIELD, None)
+                moved = "base_url" in updates and not same_target(before.get("base_url"), conn.get("base_url"))
+                if moved or tls_weakened(before, conn):
+                    # Das Token gehört zur alten Adresse und zum bisher geprüften Zertifikat.
+                    await _refuse_if_stored(f"{TOKEN_LABEL}:{name}")
+                if moved and FINGERPRINT_FIELD not in updates:
+                    # Der gemerkte Fingerabdruck gehört zum alten Server.
+                    conn.pop(FINGERPRINT_FIELD, None)
                 settings["connections"] = connections
                 await ctx.settings.set(settings)
                 return await _connection_out(conn)
@@ -319,7 +322,7 @@ class Extension(NodvardExtension):
                        for code in (404,)},
         )
         async def remove_connection(name: str) -> None:
-            """Entfernt die Verbindung samt Token im Tresor, damit eine neue gleichnamige Verbindung es nicht erbt."""
+            """Entfernt die Verbindung. Ihr Token löscht nur der Kern, mit Passwort; die Oberfläche tut das vorher."""
             settings = await ctx.settings.get()
             connections: list[dict[str, Any]] = settings.get("connections") or []
             filtered = [c for c in connections if c.get("name") != name]
@@ -327,11 +330,6 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verbindung '{name}' existiert nicht.")
             settings["connections"] = filtered
             await ctx.settings.set(settings)
-            try:
-                await ctx.secrets.delete(f"{TOKEN_LABEL}:{name}")
-            except SecretNotOwned:
-                # Ein fremdes Geheimnis (etwa von Hand im Tresor) bleibt unberührt.
-                ctx.logger.warning("Proxmox: Verbindung %s entfernt, fremdes Geheimnis im Tresor bleibt", name)
 
         ctx.api.include_router(router, permission="secrets.write")
         # "Mit Passwort verbinden" (password_connect.py) legt Verbindung und Token-Geheimnis an wie die Routen oben,
@@ -519,9 +517,9 @@ class Extension(NodvardExtension):
                 {
                     **pool,
                     "summary": (
-                        f"{shared_label(pool['nodes'])} · " if pool["shared"] else f"{pool['connection']} · "
-                    ) + f"{format_bytes(pool['used'])} von {format_bytes(pool['total'])}",
-                    "badge": percent_badge(pool["used_percent"]),
+                        f"{shared_label(pool['nodes'])} · " if pool["shared"] and pool["active"] else f"{pool['connection']} · "
+                    ) + (f"{format_bytes(pool['used'])} von {format_bytes(pool['total'])}" if pool["active"] else "nicht erreichbar"),
+                    "badge": percent_badge(pool["used_percent"]) if pool["active"] else "nicht erreichbar",
                 }
                 for pool in overview["pools"]
             ]

@@ -12,7 +12,7 @@ from nodvard_sdk import Notification as SdkNotification
 from nodvard_sdk import Severity
 from nodvard_sdk.capabilities import NotificationChannel
 from nodvard_sdk.errors import NotificationNotDelivered, NotificationSkipped
-from sqlalchemy import Text, delete, insert, literal, select
+from sqlalchemy import ColumnElement, Text, delete, insert, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core import maintenance
@@ -127,13 +127,32 @@ async def deliver(
     await _log_deliveries(session, notification_id, outcomes)
     await session.commit()
 
+    from ..core.rbac import sees_other_users
     from ..core.ws_hub import get_ws_hub
 
-    await get_ws_hub().publish(
-        "notifications",
-        {"id": notification_id, "severity": severity, "title": title, "body": body, "suppressed": suppressed},
-        required_permission="notifications.read",
+    account_id = payload.get("account_id")
+    actor_id = payload.get("actor_id")
+    is_account_notice = isinstance(kind, str) and kind.startswith(ACCOUNT_PREFIX)
+
+    def reaches(user_id: str, permissions: list[str]) -> bool:
+        return not is_account_notice or (account_id is not None and user_id == account_id) or sees_other_users(
+            permissions
+        )
+
+    def sees_actor(user_id: str, permissions: list[str]) -> bool:
+        return actor_id is None or user_id == actor_id or sees_other_users(permissions)
+
+    message = {"id": notification_id, "severity": severity, "title": title, "body": body, "suppressed": suppressed}
+    hub = get_ws_hub()
+    await hub.publish(
+        "notifications", message, required_permission="notifications.read",
+        audience=lambda user_id, permissions: reaches(user_id, permissions) and sees_actor(user_id, permissions),
     )
+    if actor_id is not None:
+        await hub.publish(
+            "notifications", {**message, "body": _neutral_body(payload)}, required_permission="notifications.read",
+            audience=lambda user_id, permissions: reaches(user_id, permissions) and not sees_actor(user_id, permissions),
+        )
     if raise_on_failure and not any(status == "sent" for _, status, _ in outcomes):
         failures = [(channel_id, error or "") for channel_id, status, error in outcomes if status == "failed"]
         if failures:
@@ -161,10 +180,58 @@ async def _log_deliveries(
     await session.flush()
 
 
+# Meldungsarten zu einem einzelnen Konto beginnen so; `payload["account_id"]` nennt das Konto.
+ACCOUNT_PREFIX = "account."
+
+# Text für Leser ohne Blick auf andere Konten, wenn eine Meldung keinen eigenen neutralen Text mitbringt.
+NEUTRAL_ACTOR_BODY = "Ein Konto mit Verwaltungsrechten hat den Zugang dieses Kontos geändert."
+
+
+def own_accounts_only(viewer_id: str) -> ColumnElement[bool]:
+    """Bedingung ohne Kontomeldungen zu fremden Konten; alte Meldungen ohne `account_id` gelten als fremd."""
+    kind = Notification.payload["notification_type"].as_string()
+    return or_(
+        kind.is_(None),
+        kind.not_like(f"{ACCOUNT_PREFIX}%"),
+        Notification.payload["account_id"].as_string() == viewer_id,
+    )
+
+
+# Titelanfänge von `account.changed`, den einzigen Meldungen, deren Titel ein Konto nennt.
+ACCOUNT_TITLE_PREFIXES = ("Zugang von „", "Neues Konto mit Verwaltungsrechten: „", "Verwaltungsrechte für „")
+
+
+def is_foreign_account_notice(payload: dict, viewer_id: str) -> bool:
+    """Gehört eine Meldung mit diesem `payload` zu einem anderen Konto als `viewer_id` (oder ist das unklar)?"""
+    kind = payload.get("notification_type")
+    return isinstance(kind, str) and kind.startswith(ACCOUNT_PREFIX) and payload.get("account_id") != viewer_id
+
+
+def body_for(row: Notification, viewer_id: str | None) -> str:
+    """Text der Meldung; mit `viewer_id` ohne den Namen eines anderen Kontos, das sie ausgelöst hat."""
+    payload = row.payload or {}
+    actor = payload.get("actor_id")
+    if viewer_id is None or actor is None or actor == viewer_id:
+        return row.body
+    return _neutral_body(payload)
+
+
+def _neutral_body(payload: dict) -> str:
+    return payload.get("neutral_body") or NEUTRAL_ACTOR_BODY
+
+
 async def list_notifications(
-    session: AsyncSession, *, unread: bool | None = None, limit: int = 100, offset: int = 0
+    session: AsyncSession,
+    *,
+    unread: bool | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    viewer_id: str | None = None,
 ) -> list[Notification]:
+    """Mit `viewer_id` fehlen Kontomeldungen zu anderen Konten als diesem."""
     stmt = select(Notification).order_by(Notification.ts.desc())
+    if viewer_id is not None:
+        stmt = stmt.where(own_accounts_only(viewer_id))
     if unread is True:
         stmt = stmt.where(Notification.read_at.is_(None))
     elif unread is False:
@@ -173,14 +240,21 @@ async def list_notifications(
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def get_notification(session: AsyncSession, notification_id: str) -> Notification | None:
-    return await session.get(Notification, notification_id)
+async def get_notification(
+    session: AsyncSession, notification_id: str, *, viewer_id: str | None = None
+) -> Notification | None:
+    stmt = select(Notification).where(Notification.id == notification_id)
+    if viewer_id is not None:
+        stmt = stmt.where(own_accounts_only(viewer_id))
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-async def unread_count(session: AsyncSession) -> int:
+async def unread_count(session: AsyncSession, *, viewer_id: str | None = None) -> int:
     from sqlalchemy import func
 
     stmt = select(func.count()).select_from(Notification).where(Notification.read_at.is_(None))
+    if viewer_id is not None:
+        stmt = stmt.where(own_accounts_only(viewer_id))
     return int((await session.execute(stmt)).scalar_one())
 
 
@@ -226,12 +300,22 @@ async def delete_notifications(session: AsyncSession, ids: list[str]) -> int:
 
 async def delete_notification(session: AsyncSession, notification_id: str) -> str | None:
     """Löscht eine Meldung und gibt ihren Titel zurück (fürs Protokoll); `None`, wenn es sie nicht gibt."""
+    detail = await delete_for_log(session, notification_id)
+    return None if detail is None else detail["title"]
+
+
+async def delete_for_log(session: AsyncSession, notification_id: str) -> dict[str, Any] | None:
+    """Löscht eine Meldung und gibt das Detail fürs Protokoll zurück, bei Kontomeldungen mit Art und Konto."""
     row = await session.get(Notification, notification_id)
     if row is None:
         return None
-    title = row.title
+    payload = row.payload or {}
+    detail: dict[str, Any] = {"title": row.title}
+    kind = payload.get("notification_type")
+    if isinstance(kind, str) and kind.startswith(ACCOUNT_PREFIX):
+        detail |= {"notification_type": kind, "account_id": payload.get("account_id")}
     await delete_notifications(session, [notification_id])
-    return title
+    return detail
 
 
 @dataclass

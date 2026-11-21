@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ServerUnavailableError, useAuthStore } from "../state/auth";
-import { wsClient } from "./ws";
+import { WS_TOO_MANY_MESSAGE, wsClient } from "./ws";
 
 type Listener = (ev: { data?: string }) => void;
 
@@ -138,5 +138,67 @@ describe("WS-Client -- abgelöste Verbindungen", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("WS-Client -- zu viele Verbindungen", () => {
+  function closeWith(socket: FakeSocket, code: number) {
+    for (const listener of socket.listeners.get("close") ?? []) (listener as (ev: { code: number }) => void)({ code });
+  }
+
+  it("Close-Code 4429: kein Wiederverbinden, Hinweis bleibt stehen", () => {
+    vi.useFakeTimers();
+    try {
+      wsClient.subscribe("hosts", () => {});
+      closeWith(FakeSocket.instances[0], 4429);
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(120_000);
+      wsClient.subscribe("jobs", () => {});
+      wsClient.ensureConnected();
+
+      expect(FakeSocket.instances).toHaveLength(1);
+      expect(wsClient.getLimitMessage()).toBe(WS_TOO_MANY_MESSAGE);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ein anderer Close-Code verbindet weiter neu", () => {
+    vi.useFakeTimers();
+    try {
+      wsClient.subscribe("hosts", () => {});
+      closeWith(FakeSocket.instances[0], 1006);
+      vi.advanceTimersByTime(30_000);
+
+      expect(FakeSocket.instances).toHaveLength(2);
+      expect(wsClient.getLimitMessage()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("zeigt den Text des Servers, wenn er vor dem Schließen ankam", () => {
+    wsClient.subscribe("hosts", () => {});
+    const socket = FakeSocket.instances[0];
+    socket.receive({ type: "error", payload: { title: "Bitte Tabs schließen." } });
+    closeWith(socket, 4429);
+
+    expect(wsClient.getLimitMessage()).toBe("Bitte Tabs schließen.");
+  });
+
+  it("retry versucht es erneut und nimmt den Hinweis weg", () => {
+    wsClient.subscribe("hosts", () => {});
+    closeWith(FakeSocket.instances[0], 4429);
+    const listener = vi.fn();
+    const off = wsClient.onLimitChange(listener);
+    try {
+      wsClient.retry();
+    } finally {
+      off();
+    }
+
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(wsClient.getLimitMessage()).toBeNull();
+    expect(listener).toHaveBeenCalled();
   });
 });

@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse
@@ -783,6 +784,29 @@ async def test_test_reports_unhealthy_when_server_unreachable(db_session, tmp_pa
     channel = _runtime.capabilities.query(NotificationChannel)[0]
     result = await channel.test()
     assert result.ok is False
+    assert "lehnt die Verbindung ab" in result.message or "nicht erreichbar" in result.message
+    for raw in ("Errno", "refused", "All connection attempts", "127.0.0.1"):
+        assert raw not in result.message
+
+
+@pytest.mark.parametrize(
+    ("exc", "fragment"),
+    [
+        (httpx.ReadTimeout("timed out"), "antwortet nicht (Zeitüberschreitung)"),
+        (httpx.ConnectError("[Errno 111] Connection refused"), "lehnt die Verbindung ab"),
+        (httpx.ConnectError("[Errno -2] Name or service not known"), "lässt sich nicht auflösen"),
+        (httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"), "Zertifikat"),
+        (httpx.ConnectError("[SSL: WRONG_VERSION_NUMBER] wrong version number"), "Verschlüsselung passt nicht"),
+        (httpx.ConnectError("All connection attempts failed"), "nicht erreichbar"),
+    ],
+)
+def test_connection_text_is_a_fixed_german_sentence(exc, fragment):
+    _ntfy_extension_class()
+    from nodvard_deck_ext_ntfy import connection_text
+
+    text = connection_text(exc)
+    assert fragment in text
+    assert not any(raw in text for raw in ("Errno", "SSL", "refused", "attempts", "timed out"))
 
 
 def test_build_message_links_to_the_dashboard_and_adds_symbols():

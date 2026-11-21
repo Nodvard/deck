@@ -3022,3 +3022,24 @@ async def test_model_test_helpers_require_known_module_manager(
     with known_actors.known_while(actors), pytest.raises(PermissionDenied):
         await getattr(ctx.settings, method)(actor=Actor.user(user.id, name), **values)
     assert await extension_setup.load_last_tests(db_session) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host", ["pve\x01\u202e2", "pve" + "x" * 5000, "\x01\u202e" + "x" * 5000])
+async def test_rejected_proposal_audit_shortens_and_cleans_the_ai_host_name(
+    client, db_session, test_settings, mock_ollama, host
+):
+    ollama_url, state = mock_ollama
+    state["next_reply"] = (
+        "NEXUS-Entscheidung:\nBEGRUENDUNG: pve2 scheint offline zu sein\n"
+        f"AKTION: EXEC {host} docker restart power_server"
+    )
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+
+    r = await client.post("/api/v1/ext/shield/chat", json={"message": "Ist pve2 erreichbar?"}, headers=_auth_header(token))
+    assert r.status_code == 200, r.text
+
+    audit = await client.get("/api/v1/audit", params={"action": "shield.proposal_rejected"}, headers=_auth_header(token))
+    hosts = [e["detail"]["host"] for e in audit.json()]
+    assert len(hosts) == 1
+    assert len(hosts[0]) <= 120 and "\x01" not in hosts[0] and "\u202e" not in hosts[0]

@@ -16,15 +16,25 @@ def _token_label(name: str) -> str:
     return f"{TOKEN_LABEL}:{name}"
 
 
-def foreign_secret_text(label: str) -> str:
-    """Satz für ein Geheimnis unter dem Label einer Verbindung, das nicht von dieser Erweiterung stammt."""
+def stored_secret_text(label: str) -> str:
+    """Satz, wenn eine Änderung gespeicherte Zugangsdaten löschen oder einem weniger geprüften Server geben würde."""
     return (
-        f"Im Tresor liegt schon ein Geheimnis „{label}“, das nicht von Proxmox-Backups stammt (etwa von Hand angelegt). "
-        "Nodvard Deck ändert und löscht es nicht – nimm einen anderen Kurznamen oder lösch das Geheimnis selbst unter "
-        "Einstellungen → Tresor, mit deinem Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App (API: "
-        "DELETE /api/v1/secrets/{id} mit current_password)."
+        f"Für „{label}“ liegen Zugangsdaten im Tresor. Diese Änderung würde sie löschen oder an einen Server geben, "
+        "dessen Zertifikat bisher abgelehnt wurde, und braucht deshalb dein Passwort und, wenn Zwei-Faktor an ist, den "
+        "Code aus der App. Ändere die Verbindung unter Einstellungen → Erweiterungen → Proxmox-Backups oder entferne dort "
+        "zuerst die Zugangsdaten (API: DELETE /api/v1/secrets/{id} mit current_password)."
     )
 
+
+
+def leftover_secret_text(name: str, label: str) -> str:
+    """Satz, wenn unter dem Namen einer neuen Verbindung noch Zugangsdaten liegen."""
+    return (
+        f"Unter dem Namen „{name}“ liegen noch Zugangsdaten einer früheren Verbindung („{label}“). Wähle einen anderen "
+        "Namen oder lege die Verbindung unter Einstellungen → Erweiterungen → Proxmox-Backups an; dort fallen die alten "
+        "Zugangsdaten nach Rückfrage mit deinem Passwort weg. Stammen sie nicht von Proxmox-Backups, lassen sie sich unter "
+        "Einstellungen → Tresor löschen (API: DELETE /api/v1/secrets/{id} mit current_password)."
+    )
 
 async def build_connectors(ctx: "ExtensionContext") -> dict[str, ProxmoxBackupConnector]:
     settings = await ctx.settings.get()

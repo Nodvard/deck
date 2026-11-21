@@ -20,7 +20,6 @@ from nodvard_sdk import (
     PageSpec,
     Refresh,
     Risk,
-    SecretNotOwned,
     WidgetAction,
     WidgetSpec,
     same_target,
@@ -29,11 +28,18 @@ from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec
 from nodvard_sdk.errors import NodvardError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .capabilities import BackupActionExecutor, ProxmoxBackupProvider, job_vmids
+from .capabilities import (
+    AmbiguousJobRef,
+    BackupActionExecutor,
+    ProxmoxBackupProvider,
+    RetryGuestMismatch,
+    _parse_job_ref,
+    job_vmids,
+)
 from .certificate import FIELD as FINGERPRINT_FIELD
 from .certificate import MAX_INPUT as MAX_FINGERPRINT_INPUT
-from .certificate import build_certificate_router, connection_pin, normalize_fingerprint
-from .config import TOKEN_LABEL, build_connectors, foreign_secret_text
+from .certificate import build_certificate_router, connection_pin, normalize_fingerprint, tls_weakened
+from .config import TOKEN_LABEL, build_connectors, leftover_secret_text, stored_secret_text
 from .connector import ProxmoxBackupApiError
 from .job_edit import JobEditError, build_job_create, build_job_update, current_values, job_snapshot
 from .receiver import ProxmoxConnectionReceiver
@@ -95,6 +101,13 @@ class _ConnectionIn(BaseModel):
     tls_insecure_skip_verify: bool = False
     tls_fingerprint_sha256: str | None = Field(default=None, max_length=MAX_FINGERPRINT_INPUT)
     enabled: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("Der Name darf nicht mit einem Leerzeichen beginnen oder enden.")
+        return value
 
     @field_validator("tls_fingerprint_sha256")
     @classmethod
@@ -274,16 +287,10 @@ class Extension(NodvardExtension):
                 )
             await ctx.secrets.create(label=label, kind="generic", value=payload.value)
 
-        async def _drop_secret_or_refuse(label: str) -> None:
-            """Löscht das Geheimnis einer Verbindung; gehört es nicht dieser Erweiterung (etwa von Hand im Tresor
-            angelegt), bleibt es und die Anfrage endet mit 409."""
-            foreign = False
-            try:
-                await ctx.secrets.delete(label)
-            except SecretNotOwned:
-                foreign = True
-            if foreign:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=foreign_secret_text(label))
+        async def _refuse_if_stored(label: str) -> None:
+            """Gespeicherte Zugangsdaten löscht oder schwächt nur der Kern, mit Passwort; hier endet es mit 409."""
+            if await ctx.secrets.exists(label):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=stored_secret_text(label))
 
         async def _connection_out(conn: dict[str, Any]) -> _ConnectionOut:
             name = str(conn.get("name") or "")
@@ -319,9 +326,12 @@ class Extension(NodvardExtension):
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Verbindung '{payload.name}' existiert bereits.",
                 )
-            # Neue Verbindung startet ohne Token: ein altes Geheimnis gleichen Namens gehörte zu einer anderen
-            # Adresse. Ein fremdes (nicht von dieser Erweiterung) bleibt, dann wird nichts angelegt.
-            await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{payload.name}")
+            # Ein Token unter diesem Namen gehörte zu einer anderen Adresse und gilt nicht für die neue Verbindung.
+            leftover = f"{TOKEN_LABEL}:{payload.name}"
+            if await ctx.secrets.exists(leftover):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail=leftover_secret_text(payload.name, leftover),
+                )
             entry = payload.model_dump()
             if entry.get(FINGERPRINT_FIELD) is None:
                 entry.pop(FINGERPRINT_FIELD, None)
@@ -344,20 +354,20 @@ class Extension(NodvardExtension):
                 if conn.get("name") != name:
                     continue
                 updates = payload.model_dump(exclude_unset=True)
-                old_url = conn.get("base_url")
+                before = dict(conn)
                 conn.update(updates)
                 if FINGERPRINT_FIELD in updates:
                     if updates[FINGERPRINT_FIELD] is None:
                         conn.pop(FINGERPRINT_FIELD, None)
                     elif "tls_insecure_skip_verify" not in updates:
                         conn["tls_insecure_skip_verify"] = False  # der Fingerabdruck ersetzt den Schalter
-                if "base_url" in updates and not same_target(old_url, conn.get("base_url")):
-                    # Das Token gehört zur alten Adresse und darf nicht an die neue gehen. Vor dem Speichern:
-                    # bei einem fremden Geheimnis bleibt die Adresse unverändert.
-                    await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{name}")
-                    if FINGERPRINT_FIELD not in updates:
-                        # Der gemerkte Fingerabdruck gehört zum alten Server.
-                        conn.pop(FINGERPRINT_FIELD, None)
+                moved = "base_url" in updates and not same_target(before.get("base_url"), conn.get("base_url"))
+                if moved or tls_weakened(before, conn):
+                    # Das Token gehört zur alten Adresse und zum bisher geprüften Zertifikat.
+                    await _refuse_if_stored(f"{TOKEN_LABEL}:{name}")
+                if moved and FINGERPRINT_FIELD not in updates:
+                    # Der gemerkte Fingerabdruck gehört zum alten Server.
+                    conn.pop(FINGERPRINT_FIELD, None)
                 settings["connections"] = connections
                 await ctx.settings.set(settings)
                 return await _connection_out(conn)
@@ -369,6 +379,7 @@ class Extension(NodvardExtension):
                        for code in (404,)},
         )
         async def remove_connection(name: str) -> None:
+            """Entfernt die Verbindung. Ihr Token löscht nur der Kern, mit Passwort; die Oberfläche tut das vorher."""
             settings = await ctx.settings.get()
             connections: list[dict[str, Any]] = settings.get("connections") or []
             filtered = [c for c in connections if c.get("name") != name]
@@ -376,11 +387,6 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verbindung '{name}' existiert nicht.")
             settings["connections"] = filtered
             await ctx.settings.set(settings)
-            try:
-                await ctx.secrets.delete(f"{TOKEN_LABEL}:{name}")
-            except SecretNotOwned:
-                # Die Verbindung ist weg; ein fremdes Geheimnis (etwa von Hand im Tresor) bleibt unberührt.
-                ctx.logger.warning("Backups: Verbindung %s entfernt, fremdes Geheimnis im Tresor bleibt", name)
 
         ctx.api.include_router(router, permission="secrets.write")
         # Fingerabdruck des Zertifikats ansehen und bestätigen (certificate.py); ändert die Verbindung wie PUT oben.
@@ -418,8 +424,10 @@ class Extension(NodvardExtension):
         async def job_failure(job_ref: str, upid: str | None = None) -> dict[str, Any]:
             """Warum der neueste (oder der genannte) Lauf fehlschlug, in Klartext (failure_text.py) samt Zeile von
             Proxmox; 404, wenn es keinen solchen Lauf gibt."""
-            if job_ref.count("--") < 2:  # kein gültiger job_ref (<Verbindung>--<Job>--<VMID>)
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Backup-Job.")
+            try:
+                _parse_job_ref(job_ref)
+            except ValueError:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Backup-Job.") from None
             try:
                 cause = await self._provider.failure_cause(job_ref, upid)
             except (RuntimeError, NodvardError, ProxmoxBackupApiError) as exc:
@@ -457,12 +465,11 @@ class Extension(NodvardExtension):
 
         async def _job_for(job_ref: str):  # noqa: ANN202 - (connector, connection, job_id, job)
             try:
-                connection, job_id, _vmid = job_ref.split("--", 2)
-            except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Job.") from exc
-            connector = (await build_connectors(ctx)).get(connection)
-            if connector is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verbindung '{connection}' unbekannt.")
+                connection, job_id, _vmid, connector = await self._provider.resolve_job(job_ref)
+            except AmbiguousJobRef as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except NodvardError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
             try:
                 job = await connector.get_job(job_id)
             except ProxmoxBackupApiError as exc:
@@ -474,7 +481,7 @@ class Extension(NodvardExtension):
         @edit_router.get(
             "/jobs/{job_ref}/config",
             responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
-                       for code in (404, 502,)},
+                       for code in (404, 409, 502,)},
         )
         async def job_config(job_ref: str) -> dict[str, Any]:
             """Die editierbaren Werte eines Jobs."""
@@ -598,7 +605,7 @@ class Extension(NodvardExtension):
         @retry_router.post(
             "/jobs/{job_ref}/retry",
             responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
-                       for code in (404, 409,)},
+                       for code in (400, 404, 409)},
         )
         async def retry_job(
             job_ref: str, payload: _RetryIn | None = None, actor: Actor = Depends(ctx.api.current_actor),
@@ -606,6 +613,10 @@ class Extension(NodvardExtension):
             ignore_space = payload.ignore_space if payload is not None else False
             try:
                 request = (await self._provider.retry(job_ref)).model_copy(update={"proposed_by": actor})
+            except RetryGuestMismatch as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            except AmbiguousJobRef as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
             except NodvardError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
             except (RuntimeError, ProxmoxBackupApiError) as exc:

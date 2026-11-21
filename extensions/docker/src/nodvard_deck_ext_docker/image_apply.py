@@ -41,6 +41,7 @@ PATH_RE = re.compile(r"^/[A-Za-z0-9._+@=/ -]{0,1023}\Z")
 """Leerzeichen sind erlaubt (shlex quotet sie), aber kein Hochkomma, kein `$`, kein Zeilenumbruch, kein `;|&*~`."""
 MAX_FILES = 8
 PORTAINER_PREFIX = "/data/compose/"
+PORTAINER_DIR_RE = re.compile(r"^/data/compose/(?:[0-9]{1,9}(?:/|\Z)|\Z)")
 
 RC_PULL, RC_UP = 10, 20
 _WARNING_RE = re.compile(r"(?:WARN\b|time=\S+ level=warning\b)")
@@ -248,7 +249,7 @@ def classify(info: dict[str, Any], *, own: bool) -> ComposeTarget | NotUpdatable
     working_dir = labels.get(LABEL_WORKDIR, "")
     raw_files = labels.get(LABEL_CONFIG_FILES, "")
     # 5. Portainer: die Umgebungsvariablen des Stacks liegen in Portainers Datenbank, nicht in den Dateien.
-    if working_dir.startswith(PORTAINER_PREFIX) or any(f.startswith(PORTAINER_PREFIX) for f in raw_files.split(",")):
+    if PORTAINER_DIR_RE.match(working_dir) or any(PORTAINER_DIR_RE.match(f) for f in raw_files.split(",")):
         return _why("portainer", "Von Portainer verwaltet – bitte in Portainer aktualisieren (Stack → „Update the stack“ mit „Re-pull image and redeploy“).")
     service = labels.get(LABEL_SERVICE, "")
     # 6. Compose v1 nennt Container `projekt_dienst_1`; v2 würde sie umbenennen.
@@ -315,9 +316,7 @@ def compose_argv(t: ComposeTarget, *args: str) -> list[str]:
     for e in t.env_files:
         argv += ["--env-file", e]
     argv = with_saved_env(argv + list(args), t.env_names)
-    if t.env_names:
-        return ["sh", "-c", 'cd -- "$1" || exit 1; shift; exec "$@"', "sh", t.working_dir, *argv]
-    return argv
+    return ["sh", "-c", 'cd -- "$1" || exit 1; shift; exec "$@"', "sh", t.working_dir, *argv]
 
 
 def pull_command(t: ComposeTarget) -> str:

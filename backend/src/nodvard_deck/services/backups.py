@@ -566,7 +566,9 @@ async def start_manual_run(*, user_id: str) -> None:
     _spawn(_go())
 
 
-async def prepare_download(settings: Settings, *, user_id: str, mode: str, password: str | None) -> DownloadTicket:
+async def prepare_download(
+    settings: Settings, *, user_id: str, mode: str, password: str | None, login_id: str | None = None, stamp: str = "",
+) -> DownloadTicket:
     """Baut eine verschlüsselte Sicherung für den Download im Hintergrund und gibt sofort ein Ticket zurück;
     das Einmal-Passwort lebt nur in diesem Task."""
     async with session_scope() as session:
@@ -600,7 +602,7 @@ async def prepare_download(settings: Settings, *, user_id: str, mode: str, passw
         file_name = f"{uuid.uuid4().hex}{fmt.FILE_SUFFIX}"
         ticket = registry.create(
             user_id=user_id, path=directory / file_name, filename=fmt.backup_name(local_now),
-            delete_after=True, ready=False,
+            delete_after=True, ready=False, login_id=login_id, stamp=stamp,
         )
     except BaseException:
         _release(token)
@@ -652,11 +654,15 @@ def cleanup_on_start(settings: Settings) -> None:
             shutil.rmtree(base / name)
 
 
-async def ticket_for_stored(settings: Settings, session: AsyncSession, *, user_id: str, name: str) -> DownloadTicket:
+async def ticket_for_stored(
+    settings: Settings, session: AsyncSession, *, user_id: str, name: str, login_id: str | None = None, stamp: str = "",
+) -> DownloadTicket:
     cfg = await load_config(session)
     target = await asyncio.to_thread(store.resolve_target, cfg.dir, settings.data_dir, create=False)
     path = await asyncio.to_thread(store.backup_path, target, name)
-    return get_ticket_registry().create(user_id=user_id, path=path, filename=name, delete_after=False, ready=True)
+    return get_ticket_registry().create(
+        user_id=user_id, path=path, filename=name, delete_after=False, ready=True, login_id=login_id, stamp=stamp,
+    )
 
 
 async def target_of(settings: Settings, session: AsyncSession) -> Path:

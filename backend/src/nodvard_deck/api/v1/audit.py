@@ -1,6 +1,6 @@
 """Audit-Abfrage und -Export (docs/04-API.md), nur lesend.
 
-Server-Ausgabe in den Details (auch aus alten Einträgen) sieht nur, wer `hosts.execute` hat (`core/action_output.py`).
+Server-Texte in Begründung und Details (auch aus alten Einträgen) sieht nur, wer `hosts.execute` hat (`core/action_output.py`).
 """
 
 from __future__ import annotations
@@ -10,8 +10,9 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel
 
-from ...core.action_output import OUTPUT_PERMISSION, hide_audit_detail
+from ...core.action_output import OUTPUT_PERMISSION, hide_audit_detail, hide_audit_reason
 from ...services import audit as audit_service
+from ...services.actor_labels import may_see_other_users
 from ...services.auth import user_has_permission
 from ..responses import error_responses, file_responses
 from ..deps import CurrentUser, SessionDep, require_permission
@@ -35,7 +36,7 @@ class AuditEntryOut(BaseModel):
     reason: str | None
     detail: dict
     output_hidden: bool = False
-    """`true`, wenn Ausgabe oder ein Befehl aus `detail` weggelassen wurde (der Abrufende hat kein
+    """`true`, wenn Text vom Server aus `reason` oder `detail` weggelassen wurde (der Abrufende hat kein
     `hosts.execute`)."""
     correlation_id: str | None
     ip: str | None
@@ -43,8 +44,13 @@ class AuditEntryOut(BaseModel):
 
     @classmethod
     def from_model(cls, entry, *, show_output: bool) -> "AuditEntryOut":  # noqa: ANN001 - AuditEntry-ORM-Objekt
-        """Ohne `show_output` fehlen Server-Ausgabe und Befehle in `detail` (auch in alten Einträgen)."""
-        detail, output_hidden = (entry.detail, False) if show_output else hide_audit_detail(entry.action, entry.detail)
+        """Ohne `show_output` fehlen Server-Texte in `reason` und `detail` (auch in alten Einträgen)."""
+        if show_output:
+            reason, detail, output_hidden = entry.reason, entry.detail, False
+        else:
+            reason, reason_hidden = hide_audit_reason(entry.action, entry.reason)
+            detail, detail_hidden = hide_audit_detail(entry.action, entry.detail)
+            output_hidden = reason_hidden or detail_hidden
         return cls(
             id=entry.id,
             ts=entry.ts,
@@ -54,7 +60,7 @@ class AuditEntryOut(BaseModel):
             target_type=entry.target_type,
             target_id=entry.target_id,
             outcome=entry.outcome,
-            reason=entry.reason,
+            reason=reason,
             detail=detail,
             output_hidden=output_hidden,
             correlation_id=entry.correlation_id,
@@ -67,7 +73,11 @@ async def _for_viewer(session, user, entries):
     """Eingetippte Anmeldenamen sieht niemand: neue Einträge enthalten sie gar nicht, bei alten hat sie die Migration
     entfernt (die Antwort schwärzt sie zur Sicherheit trotzdem). Kennungen und Längen davon sieht nur der Owner, für
     alle anderen, auch Admins, werden sie geschwärzt, sonst käme ein Admin so an das Owner-Konto."""
-    return await audit_service.hide_typed_names(session, entries, keep_traces=user.is_owner)
+    entries = await audit_service.hide_typed_names(session, entries, keep_traces=user.is_owner)
+    # Namen und Rollen fremder Konten nur für den, der andere Konten sehen darf (wie bei Akteur-Namen).
+    if may_see_other_users(user):
+        return entries
+    return audit_service.hide_other_accounts(entries, user.id)
 
 
 @router.get("", responses=error_responses(401, 403, 507))

@@ -45,6 +45,7 @@ const ACTION_LABELS: Record<string, string> = {
   "branding.custom_css.saved": "Eigenes CSS gespeichert",
   "auth.recovery_codes_generated": "Wiederherstellungs-Codes erzeugt",
   "auth.2fa_disabled": "Zwei-Faktor abgeschaltet",
+  "auth.refresh_reused": "Alte Anmeldung erneut benutzt, Sitzung beendet",
   "auth.password_check_failed": "Passwortabfrage fehlgeschlagen",
   "auth.password_check_locked": "Sicherheitsabfragen vorübergehend gesperrt",
   "auth.totp_confirm_failed": "Zwei-Faktor-Einrichtung: falscher Code",
@@ -97,6 +98,7 @@ const ACTION_LABELS: Record<string, string> = {
   "system.backup.downloaded": "Sicherung heruntergeladen",
   "system.backup.verified": "Sicherung geprüft",
   "system.backup.deleted": "Sicherung gelöscht",
+  "job.run.cancelled": "Job-Lauf abgebrochen",
   "system.restore.uploaded": "Sicherung zum Wiederherstellen hochgeladen",
   "system.restore.upload_failed": "Hochladen zum Wiederherstellen fehlgeschlagen",
   "system.restore.inspected": "Sicherung vor dem Wiederherstellen geprüft",
@@ -148,6 +150,8 @@ const ACTION_LABELS: Record<string, string> = {
   "host.setup_with_password": "Server mit Passwort einrichten",
   "host.group_changed": "Gruppe geändert",
   "shield.finding_ignored": "Fund ignoriert",
+  "shield.folder_excluded": "Ordner von den Scans ausgenommen",
+  "shield.folder_findings_reopened": "Funde eines ausgenommenen Ordners wieder beachtet",
   "shield.finding_reopened": "Fund wieder beachtet",
   "shield.malware_found": "Schadsoftware gefunden",
   "shield.quarantine": "Datei in Quarantäne verschoben",
@@ -206,7 +210,7 @@ const OUTCOME_LABELS: Record<string, string> = { success: "Erfolgreich", failure
 /** Was ein Eintrag betrifft, in Worten (die API nennt die Art englisch: `user`, `host` ...). */
 const TARGET_LABELS: Record<string, string> = {
   user: "Benutzer", host: "Server", host_group: "Servergruppe", action: "Aktion", extension: "Erweiterung", backup: "Sicherung",
-  file_source: "Dateiquelle", script: "Skript",
+  file_source: "Dateiquelle", script: "Skript", job_run: "Job-Lauf",
   restore: "Wiederherstellung", system: "System", setting: "Einstellung", secret: "Zugangsdaten", container: "Container", app: "App",
   notification: "Meldung", stack: "Stack",
 };

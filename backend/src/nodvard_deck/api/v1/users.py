@@ -193,7 +193,14 @@ async def _report_account_change(session: SessionDep, admin: User, target: User,
                 "Hast du das nicht erwartet, sprich mit der Person, die es getan hat, oder dem Inhaber."
             ),
             severity="warning",
-            payload={"notification_type": "account.changed", "path": "/settings/users", "tags": ["warning", "key"]},
+            payload={
+                "notification_type": "account.changed", "account_id": target.id, "actor_id": admin.id,
+                "neutral_body": (
+                    f"{text.replace('„{admin}“', 'Ein Konto mit Verwaltungsrechten').format(target=target.username)} "
+                    "Hast du das nicht erwartet, sprich mit dem Inhaber."
+                ),
+                "path": "/settings/users", "tags": ["warning", "key"],
+            },
         )
     except Exception:
         import logging

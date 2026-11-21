@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.rbac import has_permission
+from ..core.rbac import sees_other_users
 from ..models import Action, User
 from .auth import user_permissions
 from .extensions import get_records
@@ -33,10 +33,7 @@ def may_see_other_users(viewer: User) -> bool:
     """Darf `viewer` Benutzernamen anderer Nutzer sehen? Der Owner hat `*`.
 
     Ja mit `users.read` oder `actions.approve:*`: Wer Vorschläge entscheidet, muss den Vorschlagenden erkennen."""
-    permissions = user_permissions(viewer)
-    return has_permission(permissions, "users.read") or any(
-        permission.partition(":")[0] == "actions.approve" for permission in permissions
-    )
+    return sees_other_users(user_permissions(viewer))
 
 
 class ActorLabels:

@@ -49,9 +49,8 @@ def has_any(granted: Iterable[str], required: Iterable[str]) -> bool:
 
 
 # Der Präfix eines Event-Namens bestimmt die Berechtigung, die ein WS-Client zum Sehen braucht; gefiltert wird die
-# Zustellung, nicht das Abonnieren; dieselbe Tabelle gilt für die themenreinen Kanäle. Unbekannte Präfixe (z. B.
-# `ext.<id>.*`, `system.*`) brauchen nur eine Anmeldung: Events tragen nie sensible Werte, und Extensions sind
-# vertrauenswürdiger Code (docs/01 §7), keine Sandbox.
+# Zustellung, nicht das Abonnieren; dieselbe Tabelle gilt für die themenreinen Kanäle. Präfixe ohne Eintrag gehen
+# nicht über WebSocket, außer sie stehen in `PUBLIC_EVENT_PREFIXES`.
 EVENT_PREFIX_PERMISSIONS: dict[str, str] = {
     "host": "hosts.read",
     "action": "hosts.read",
@@ -60,11 +59,28 @@ EVENT_PREFIX_PERMISSIONS: dict[str, str] = {
     "audit": "audit.read",
 }
 
+# Jeder Angemeldete braucht sie: Die Oberfläche lädt nach `extension.*` Navigation und Kacheln neu.
+PUBLIC_EVENT_PREFIXES: frozenset[str] = frozenset({"extension"})
+
 
 def permission_for_event(event_name: str) -> str | None:
-    """Die nötige Berechtigung für das Event; `None` heißt, jeder angemeldete WS-Client sieht es."""
+    """Die nötige Berechtigung für das Event laut `EVENT_PREFIX_PERMISSIONS`, sonst `None`."""
     prefix = event_name.split(".", 1)[0]
     return EVENT_PREFIX_PERMISSIONS.get(prefix)
+
+
+def event_reaches_ws(event_name: str) -> bool:
+    """Ob das Event überhaupt über WebSocket verteilt wird."""
+    prefix = event_name.split(".", 1)[0]
+    return prefix in EVENT_PREFIX_PERMISSIONS or prefix in PUBLIC_EVENT_PREFIXES
+
+
+def sees_other_users(permissions: Iterable[str]) -> bool:
+    """Ob diese Rechte Benutzernamen anderer Konten zeigen: `users.read` oder ein `actions.approve`-Recht."""
+    permissions = list(permissions)
+    return has_permission(permissions, "users.read") or any(
+        permission.partition(":")[0] == "actions.approve" for permission in permissions
+    )
 
 
 # Eingebaute Rollen. `owner` steht nicht hier: Er umgeht RBAC ganz (`User.is_owner`), damit eine Rollenänderung die

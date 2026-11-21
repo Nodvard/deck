@@ -280,6 +280,237 @@ describe("Nodvard Shield Virenschutz", () => {
     expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("Fehlalarm"), expect.objectContaining({ danger: true }));
   });
 
+  it("viele offene Funde in einem Ordner: Hinweis, Ordner ausnehmen nach Rückfrage", async () => {
+    const calls: Call[] = [];
+    const crowd = Array.from({ length: 10 }, (_, i) => ({
+      id: `k${i}`, host_id: "h-pi", host_name: "Raspberry Pi", path: `/usr/share/sploits/bin/${i}.zip`, signature: "Html.Exploit",
+      status: "detected", quarantine_path: null, note: null, detected_at: 1758800000, status_changed_at: null,
+    }));
+    const deeper = Array.from({ length: 3 }, (_, i) => ({ ...crowd[0], id: `u${i}`, path: `/usr/share/sploits/bin/sub/${i}.zip` }));
+    const base = mockFetch(calls);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/defender/findings") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify([...FINDINGS, ...crowd, ...deeper]), { status: 200 });
+      if (url.endsWith("/findings/exclude-folder")) {
+        calls.push({ url, method: "POST", body: JSON.parse(init?.body as string) });
+        return new Response(JSON.stringify({ ok: true, folder: "/usr/share/sploits/bin", closed: 10 }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    await screen.findByTestId("host-h-pi");
+    fireEvent.click(screen.getByRole("tab", { name: /Quarantäne/ }));
+    const hint = await screen.findByTestId("crowded-folder");
+    expect(hint).toHaveTextContent("„/usr/share/sploits/bin“");
+    expect(hint).toHaveTextContent("Auf Raspberry Pi sind 13 Funde");
+    expect(hint).toHaveTextContent("Ausgenommene Ordner");
+    fireEvent.click(screen.getByRole("button", { name: "Ordner ausnehmen und Funde schließen" }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/findings/exclude-folder"))).toBe(true));
+    expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("auf ALLEN Servern"), expect.objectContaining({ danger: true }));
+    expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("„Alle Funde dieses Ordners wieder beachten“"), expect.anything());
+    expect(calls.find((c) => c.url.endsWith("/findings/exclude-folder"))?.body).toEqual({ host_id: "h-pi", folder: "/usr/share/sploits/bin", all_servers: true });
+    expect(confirmDialog).toHaveBeenCalledTimes(2);
+  });
+
+  it("ein durch das Ausnehmen geschlossener Fund bietet an, den ganzen Ordner wieder zu beachten", async () => {
+    const calls: Call[] = [];
+    const closed = {
+      id: "g1", host_id: "h-pi", host_name: "Raspberry Pi", path: "/usr/share/sploits/bin/1.zip", signature: "Html.Exploit",
+      status: "ignored", quarantine_path: null, detected_at: 1758800000, status_changed_at: 1758800100,
+      note: "Der Ordner /usr/share/sploits/bin ist auf allen Servern von den Scans ausgenommen.",
+    };
+    const base = mockFetch(calls);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/defender/findings") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify([...FINDINGS, closed]), { status: 200 });
+      if (url.endsWith("/findings/reopen-folder")) {
+        calls.push({ url, method: "POST", body: JSON.parse(init?.body as string) });
+        return new Response(JSON.stringify({ ok: true, reopened: 300 }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    await screen.findByTestId("host-h-pi");
+    fireEvent.click(screen.getByRole("tab", { name: /Quarantäne/ }));
+    fireEvent.change(await screen.findByLabelText("Filter"), { target: { value: "all" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Alle Funde dieses Ordners wieder beachten" }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/findings/reopen-folder"))).toBe(true));
+    expect(calls.find((c) => c.url.endsWith("/findings/reopen-folder"))?.body).toEqual({ host_id: "h-pi", folder: "/usr/share/sploits/bin" });
+    expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("Die Ausnahme selbst bleibt"), expect.anything());
+  });
+
+  it("Ordner-Knöpfe sperren sich während des Laufs, Texte nennen Unterordner und den Grund der Rechteprüfung", async () => {
+    const calls: Call[] = [];
+    const crowd = Array.from({ length: 10 }, (_, i) => ({
+      id: `k${i}`, host_id: "h-pi", host_name: "Raspberry Pi", path: `/usr/share/sploits/bin/${i}.zip`, signature: "Html.Exploit",
+      status: "detected", quarantine_path: null, note: null, detected_at: 1758800000, status_changed_at: null,
+    }));
+    const base = mockFetch(calls);
+    let finish: () => void = () => undefined;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/defender/findings") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify([...FINDINGS, ...crowd]), { status: 200 });
+      if (url.endsWith("/findings/exclude-folder")) {
+        calls.push({ url, method: "POST", body: JSON.parse(init?.body as string) });
+        await new Promise<void>((resolve) => { finish = resolve; });
+        return new Response(JSON.stringify({ ok: true, closed: 10 }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    await screen.findByTestId("host-h-pi");
+    fireEvent.click(screen.getByRole("tab", { name: /Quarantäne/ }));
+    expect(await screen.findByTestId("crowded-folder")).toHaveTextContent("samt Unterordnern offen");
+    fireEvent.click(screen.getByRole("button", { name: "Ordner ausnehmen und Funde schließen" }));
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/findings/exclude-folder"))).toHaveLength(1));
+    expect(screen.getByRole("button", { name: "Ordner ausnehmen und Funde schließen" })).toBeDisabled();
+    expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("„/usr/share/sploits/bin“ samt Unterordnern auf ALLEN"), expect.anything());
+    expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("nicht geprüft, ob dort andere Konten in den Ordner schreiben dürfen"), expect.anything());
+    finish();
+  });
+
+  it("der Sammel-Knopf zum Wiederbeachten steht nur einmal je Ordner und ist während des Laufs gesperrt", async () => {
+    const calls: Call[] = [];
+    const note = "Der Ordner /usr/share/sploits/bin ist auf allen Servern von den Scans ausgenommen.";
+    const closed = Array.from({ length: 4 }, (_, i) => ({
+      id: `g${i}`, host_id: "h-pi", host_name: "Raspberry Pi", path: `/usr/share/sploits/bin/${i}.zip`, signature: "Html.Exploit",
+      status: "ignored", quarantine_path: null, detected_at: 1758800000, status_changed_at: 1758800100, note,
+    }));
+    const base = mockFetch(calls);
+    let finish: () => void = () => undefined;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/defender/findings") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify([...FINDINGS, ...closed]), { status: 200 });
+      if (url.endsWith("/findings/reopen-folder")) {
+        calls.push({ url, method: "POST", body: JSON.parse(init?.body as string) });
+        await new Promise<void>((resolve) => { finish = resolve; });
+        return new Response(JSON.stringify({ ok: true, reopened: 4 }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    await screen.findByTestId("host-h-pi");
+    fireEvent.click(screen.getByRole("tab", { name: /Quarantäne/ }));
+    fireEvent.change(await screen.findByLabelText("Filter"), { target: { value: "all" } });
+    const button = await screen.findByRole("button", { name: "Alle Funde dieses Ordners wieder beachten" });
+    expect(screen.getAllByRole("button", { name: "Alle Funde dieses Ordners wieder beachten" })).toHaveLength(1);
+    fireEvent.click(button);
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/findings/reopen-folder"))).toHaveLength(1));
+    expect(screen.getByRole("button", { name: "Alle Funde dieses Ordners wieder beachten" })).toBeDisabled();
+    expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("samt Unterordnern"), expect.anything());
+    finish();
+  });
+
+  it("Ordner mit Sternchen im Namen werden nicht zum Ausnehmen angeboten", async () => {
+    const calls: Call[] = [];
+    const star = Array.from({ length: 10 }, (_, i) => ({
+      id: `s${i}`, host_id: "h-pi", host_name: "Raspberry Pi", path: `/srv/*/${i}.zip`, signature: "Html.Exploit",
+      status: "detected", quarantine_path: null, note: null, detected_at: 1758800000, status_changed_at: null,
+    }));
+    const base = mockFetch(calls);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/defender/findings") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify([...FINDINGS, ...star]), { status: 200 });
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    await screen.findByTestId("host-h-pi");
+    fireEvent.click(screen.getByRole("tab", { name: /Quarantäne/ }));
+    await screen.findByTestId("findings");
+    expect(screen.queryByTestId("crowded-folder")).toBeNull();
+  });
+
+  it("Systemordner und ihre Unterordner werden nicht zum Ausnehmen angeboten", async () => {
+    const calls: Call[] = [];
+    const risky = ["/tmp", "/tmp/ablage", "/srv/upload", "/home/anna", "/usr/lib64"].flatMap((dir, d) =>
+      Array.from({ length: 10 }, (_, i) => ({
+        id: `r${d}-${i}`, host_id: "h-pi", host_name: "Raspberry Pi", path: `${dir}/${i}.zip`, signature: "Html.Exploit",
+        status: "detected", quarantine_path: null, note: null, detected_at: 1758800000, status_changed_at: null,
+      })));
+    const base = mockFetch(calls);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/defender/findings") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify([...FINDINGS, ...risky]), { status: 200 });
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    await screen.findByTestId("host-h-pi");
+    fireEvent.click(screen.getByRole("tab", { name: /Quarantäne/ }));
+    await screen.findByTestId("findings");
+    expect(screen.queryByTestId("crowded-folder")).toBeNull();
+  });
+
+  it("ohne die zweite Bestätigung („für alle Server“) geht nichts an den Server", async () => {
+    const calls: Call[] = [];
+    const crowd = Array.from({ length: 10 }, (_, i) => ({
+      id: `k${i}`, host_id: "h-pi", host_name: "Raspberry Pi", path: `/usr/share/sploits/bin/${i}.zip`, signature: "Html.Exploit",
+      status: "detected", quarantine_path: null, note: null, detected_at: 1758800000, status_changed_at: null,
+    }));
+    const base = mockFetch(calls);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/defender/findings") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify(crowd), { status: 200 });
+      return base(input, init);
+    }));
+    confirmDialog.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    render(<SocPage />);
+    await screen.findByTestId("host-h-pi");
+    fireEvent.click(screen.getByRole("tab", { name: /Quarantäne/ }));
+    await screen.findByTestId("crowded-folder");
+    fireEvent.click(screen.getByRole("button", { name: "Ordner ausnehmen und Funde schließen" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalledTimes(2));
+    expect(confirmDialog).toHaveBeenLastCalledWith(expect.stringContaining("allen Servern"), expect.anything());
+    expect(calls.some((c) => c.url.endsWith("/findings/exclude-folder"))).toBe(false);
+  });
+
+  it("an der Grenze der Liste (200 Funde) heißt die Zahl „mindestens“", async () => {
+    const calls: Call[] = [];
+    const many = Array.from({ length: 200 }, (_, i) => ({
+      id: `m${i}`, host_id: "h-pi", host_name: "Raspberry Pi", path: `/usr/share/sploits/bin/${i}.zip`, signature: "Html.Exploit",
+      status: "detected", quarantine_path: null, note: null, detected_at: 1758800000, status_changed_at: null,
+    }));
+    const base = mockFetch(calls);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/defender/findings") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify(many), { status: 200 });
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    await screen.findByTestId("host-h-pi");
+    fireEvent.click(screen.getByRole("tab", { name: /Quarantäne/ }));
+    expect(await screen.findByTestId("crowded-folder")).toHaveTextContent("mindestens 200 Funde");
+    fireEvent.click(screen.getByRole("button", { name: "Ordner ausnehmen und Funde schließen" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("mindestens 200 offenen Funde"), expect.anything()));
+  });
+
+  it("ohne das Recht für Einstellungen kein Knopf zum Ausnehmen", async () => {
+    const crowd = Array.from({ length: 10 }, (_, i) => ({
+      id: `k${i}`, host_id: "h-pi", host_name: "Raspberry Pi", path: `/usr/share/sploits/bin/${i}.zip`, signature: "Html.Exploit",
+      status: "detected", quarantine_path: null, note: null, detected_at: 1758800000, status_changed_at: null,
+    }));
+    const base = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/defender/findings") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify(crowd), { status: 200 });
+      return base(input, init);
+    }));
+    (window.__nodvardDeck!.hasPermission as Mock).mockImplementation((p: string) => p !== "extensions.manage");
+    render(<SocPage />);
+    await screen.findByTestId("host-h-pi");
+    fireEvent.click(screen.getByRole("tab", { name: /Quarantäne/ }));
+    await screen.findByTestId("findings");
+    expect(screen.queryByTestId("crowded-folder")).toBeNull();
+  });
+
+  it("wenige Funde in einem Ordner: kein Hinweis", async () => {
+    vi.stubGlobal("fetch", mockFetch([]));
+    render(<SocPage />);
+    await screen.findByTestId("host-h-pi");
+    fireEvent.click(screen.getByRole("tab", { name: /Quarantäne/ }));
+    await screen.findByTestId("findings");
+    expect(screen.queryByTestId("crowded-folder")).toBeNull();
+  });
+
   it("ohne Bestätigung passiert beim Wiederherstellen nichts", async () => {
     confirmDialog.mockResolvedValue(false);
     const calls: Call[] = [];

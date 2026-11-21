@@ -194,9 +194,22 @@ async def test_open_write_keeps_the_permissions_of_the_existing_file(local_ssh_s
     assert stat.S_IMODE((root / "geheim.conf").stat().st_mode) == 0o640
 
 
+def _one_hop_readlink(monkeypatch) -> None:
+    """`readlink` liefert wie OpenSSH das Linkziel selbst; der Testserver löst es im chroot sonst falsch auf."""
+    import asyncssh
+
+    def readlink(self, path: bytes) -> bytes:
+        return os.fsencode(os.readlink(os.fsdecode(self.map_path(path))))
+
+    monkeypatch.setattr(asyncssh.SFTPServer, "readlink", readlink)
+
+
 @pytest.mark.asyncio
-async def test_copying_a_file_onto_itself_through_a_link_keeps_the_content(local_ssh_server, db_session, tmp_path, test_settings):
+async def test_copying_a_file_onto_itself_through_a_link_keeps_the_content(
+    local_ssh_server, db_session, tmp_path, test_settings, monkeypatch
+):
     """Der Fall von frueher: `alias -> .`, gelesen wird `wichtig.txt`, geschrieben `alias/wichtig.txt`."""
+    _one_hop_readlink(monkeypatch)
     (source,) = await _sources(db_session, test_settings, local_ssh_server, tmp_path)
     root = local_ssh_server[4]
     (root / "wichtig.txt").write_bytes(CONTENT)
@@ -209,7 +222,10 @@ async def test_copying_a_file_onto_itself_through_a_link_keeps_the_content(local
 
 
 @pytest.mark.asyncio
-async def test_writing_to_a_file_link_updates_the_real_file_and_keeps_the_link(local_ssh_server, db_session, tmp_path, test_settings):
+async def test_writing_to_a_file_link_updates_the_real_file_and_keeps_the_link(
+    local_ssh_server, db_session, tmp_path, test_settings, monkeypatch
+):
+    _one_hop_readlink(monkeypatch)
     (source,) = await _sources(db_session, test_settings, local_ssh_server, tmp_path)
     root = local_ssh_server[4]
     (root / "echt.txt").write_bytes(b"alt")
@@ -609,18 +625,20 @@ def _pretend_other_owner(monkeypatch, name: str, *, field: str = "uid") -> None:
     Besitzer lassen sich nur als root anlegen, die Tests sollen auch ohne laufen.)"""
     import asyncssh
 
-    real_stat = asyncssh.SFTPClient.stat
+    def other_owner(real):  # noqa: ANN001, ANN202
+        async def call(self, path, *args, **kwargs):  # noqa: ANN001
+            attrs = await real(self, path, *args, **kwargs)
+            if str(path).endswith(name):
+                setattr(attrs, field, getattr(attrs, field) + 4242)
+            return attrs
 
-    async def other_owner(self, path, *args, **kwargs):  # noqa: ANN001
-        attrs = await real_stat(self, path, *args, **kwargs)
-        if str(path).endswith(name):
-            setattr(attrs, field, getattr(attrs, field) + 4242)
-        return attrs
+        return call
 
     async def not_root(self, *args, **kwargs):  # noqa: ANN001
         raise asyncssh.SFTPPermissionDenied("nur root darf den Besitzer aendern")
 
-    monkeypatch.setattr(asyncssh.SFTPClient, "stat", other_owner)
+    monkeypatch.setattr(asyncssh.SFTPClient, "stat", other_owner(asyncssh.SFTPClient.stat))
+    monkeypatch.setattr(asyncssh.SFTPClient, "lstat", other_owner(asyncssh.SFTPClient.lstat))
     monkeypatch.setattr(asyncssh.SFTPClientFile, "chown", not_root)
 
 

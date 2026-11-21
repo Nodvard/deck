@@ -248,13 +248,17 @@ async def test_refresh_rotation_and_reuse_detection(client, db_session):
     # httpx' eigener Cookie-Jar haette ihn schon durch den neuen ersetzt. Erst nach der
     # Gnadenfrist ist das ein Fehlschlag (siehe `test_refresh_grace_*` unten).
     await _age_revocations(db_session)
-    _browser_holds(client, old_cookie)
-    r2 = await client.post("/api/v1/auth/refresh", json={})
-    assert r2.status_code == 401
-
     _browser_holds(client, new_cookie)
+    r2 = await client.post("/api/v1/auth/refresh", json={})
+    assert r2.status_code == 200
+    newest_cookie = r2.cookies["nodvard_deck_refresh"]
+
+    _browser_holds(client, old_cookie)
     r3 = await client.post("/api/v1/auth/refresh", json={})
-    assert r3.status_code == 200
+    assert r3.status_code == 401
+    # Wer den alten Token nach der Gnadenfrist noch hat, hält eine Kopie: Die Kette endet.
+    _browser_holds(client, newest_cookie)
+    assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 401
 
 
 @pytest.mark.asyncio
@@ -476,10 +480,10 @@ async def test_refresh_grace_does_not_apply_after_own_password_change(client):
     )
     assert ok.status_code == 204, ok.text
 
-    _browser_holds(client, old_cookie)
-    assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 401
     _browser_holds(client, first.cookies["nodvard_deck_refresh"])
     assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 200
+    _browser_holds(client, old_cookie)
+    assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 401
 
 
 @pytest.mark.asyncio
@@ -529,10 +533,10 @@ async def test_password_change_with_stale_session_still_signs_out_other_devices(
     assert ok.status_code == 204, ok.text
 
     assert (await client.post("/api/v1/auth/refresh", json={"refresh_token": phone_refresh})).status_code == 401
-    _browser_holds(client, old_cookie)
-    assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 401
     _browser_holds(client, current_cookie)
     assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 200
+    _browser_holds(client, old_cookie)
+    assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 401
 
 
 @pytest.mark.asyncio

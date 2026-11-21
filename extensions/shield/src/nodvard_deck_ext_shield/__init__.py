@@ -1153,7 +1153,10 @@ class Extension(NodvardExtension):
                     action=f"{EXT_ID}.proposal_rejected",
                     outcome="denied",
                     reason=parsed.rejection_reason,
-                    detail={"command": sanitize_untrusted(parsed.command or "", 300), "host": parsed.host},
+                    detail={
+                        "command": sanitize_untrusted(parsed.command or "", 300),
+                        "host": sanitize_untrusted(parsed.host or "", 100),
+                    },
                     correlation_id=correlation_id,
                 )
                 summaries.append(f"Abgelehnt: {parsed.rejection_reason}")

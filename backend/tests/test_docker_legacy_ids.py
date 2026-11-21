@@ -210,7 +210,11 @@ async def test_an_existing_installation_keeps_settings_job_data_and_proposals(
 
     async def fake_run(host, command, **_kwargs):
         commands.append(command)
-        return ExecResult(exit_code=0, stdout="0123456789ab\n" if "inspect" in command else "web\n", stderr="", duration_ms=1)
+        if "--type container" in command:
+            out = '[{"Config": {"Image": "nginx:1"}}]\n'
+        else:
+            out = "0123456789ab\n" if "inspect" in command else "web\n"
+        return ExecResult(exit_code=0, stdout=out, stderr="", duration_ms=1)
 
     monkeypatch.setattr(loaded.ctx.exec, "run", fake_run)
     approved = await client.post(f"/api/v1/actions/{state['proposal']}/approve", headers=headers)

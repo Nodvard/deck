@@ -34,6 +34,13 @@ def is_shared(pool: dict[str, Any]) -> bool:
     return str(pool.get("type") or "") in _REMOTE_TYPES
 
 
+def is_active(pool: dict[str, Any]) -> bool:
+    return (
+        str(pool.get("active", 1)).strip().lower() not in ("0", "false", "none", "")
+        and str(pool.get("status", "")).strip().lower() != "unknown"
+    )
+
+
 def shared_label(nodes: list[str]) -> str:
     """Kurzer Hinweis, wo ein geteilter Speicher verfügbar ist."""
     if len(nodes) <= 3:
@@ -132,6 +139,8 @@ async def collect_storage(
                         shared_keys.append(("all", storage, pool.get("type"), pool.get("total")))
                     known = next((shared_rows[k] for k in shared_keys if k in shared_rows), None)
                     if known is not None:
+                        if not is_active(pool):
+                            known.update(active=False, used_percent=None, tone="danger")
                         # Auch die Schlüssel dieses Funds merken: der nächste Knoten derselben Verbindung findet die Zeile
                         # sonst nicht, wenn er (z. B. Speicher gerade inaktiv, Größe 0) den verbindungsübergreifenden
                         # Schlüssel nicht bildet.
@@ -143,7 +152,8 @@ async def collect_storage(
                             known["connections"].append(conn_name)
                         continue
                 content = [c for c in str(pool.get("content") or "").split(",") if c]
-                percent = _percent(pool)
+                active = is_active(pool)
+                percent = _percent(pool) if active else None
                 row: dict[str, Any] = {
                     "id": f"{conn_name}/{node_name}/{storage}",
                     "connection": conn_name,
@@ -155,12 +165,12 @@ async def collect_storage(
                     "nodes": [node_name],
                     "connections": [conn_name],
                     "shared": shared,
-                    "active": bool(pool.get("active", 1)),
+                    "active": active,
                     "total": pool.get("total"),
                     "used": pool.get("used"),
                     "avail": pool.get("avail"),
                     "used_percent": percent,
-                    "tone": usage_tone(percent) if pool.get("active", 1) else "danger",
+                    "tone": usage_tone(percent) if active else "danger",
                 }
                 if details:
                     row.update(await _pool_content(connector, conn_name, node_name, storage, names))

@@ -94,12 +94,20 @@ UNRELIABLE_HINT = (
     "Die Meldung von ClamAV ist nicht eindeutig lesbar (zum Beispiel ein Zeilenumbruch im Dateinamen). "
     "Es wurde nichts automatisch verschoben – bitte auf dem Server nachsehen."
 )
+ABORTED_NOTE = (
+    "Der Scan wurde abgebrochen, bevor er fertig war. Der Pfad ist deshalb nicht gesichert: Bitte vor dem "
+    "Verschieben auf dem Server nachsehen."
+)
 UNRELIABLE_NOTE = (
     "Der Pfad ist nicht gesichert: Die Ausgabe von ClamAV war nicht eindeutig lesbar (zum Beispiel ein "
     "Zeilenumbruch im Dateinamen). Bitte vor dem Verschieben auf dem Server nachsehen."
 )
 
 REALTIME_LOG_BROKEN = "Das Protokoll des Echtzeit-Wächters kam nicht vollständig zurück."
+NO_EXECUTE_NOTE = (
+    "Nicht automatisch in die Quarantäne verschoben: Wer diesen Scan gestartet hat, darf keine Befehle auf Servern "
+    "ausführen. Bitte von jemandem mit diesem Recht prüfen und verschieben lassen."
+)
 REALTIME_UNCHECKED = (
     "clamd konnte den Fund aus dem Protokoll des Echtzeit-Wächters nicht noch einmal prüfen. Es wurde nichts "
     "automatisch verschoben – bitte auf dem Server nachsehen."
@@ -133,11 +141,18 @@ QUARANTINE_LATE_CHECKING = (
     "nachsehen."
 )
 RESTORED_ELSEWHERE = "Zurückgelegt an den hinterlegten Ort {place} (laut Fund: {path})."
+FOLDER_EXCLUDED_NOTE = "Der Ordner {folder} ist auf allen Servern von den Scans ausgenommen."
 RESTORED_ELSEWHERE_MARK = RESTORED_ELSEWHERE.split("{place}")[0]
 QUARANTINE_LATE_UNKNOWN = (
     f"Ob die Datei in die Quarantäne kam, ließ sich nicht feststellen. Bitte auf dem Server unter {av.QUARANTINE_DIR} "
     "und am ursprünglichen Ort nachsehen."
 )
+
+
+def _is_folder_note(note: str) -> bool:
+    head, _, tail = FOLDER_EXCLUDED_NOTE.partition("{folder}")
+    return note.startswith(head) and note.endswith(tail)
+
 
 KIND_LABEL = {"quick": "Schnellscan", "deep": "Tiefenscan", "watch": "Echtzeit-Wächter", "custom": "Scan"}
 # Die "großen" Scans: je Server läuft höchstens einer davon, und der Wächter wartet, bis er fertig ist
@@ -164,12 +179,17 @@ def watch_interval_min(settings: dict[str, Any]) -> int:
 def _unreliable_hint(parsed: av.ScanResult) -> str:
     """Hinweistext zu einem Lauf ohne automatische Quarantäne: unleserliche Pfade, ungeprüfte Dateien oder beides."""
     if parsed.hint:
-        return parsed.hint
+        return f"{parsed.hint} {av.skipped_message(parsed.skipped)}" if parsed.skipped else parsed.hint
     if not parsed.skipped:
         return UNRELIABLE_HINT
     if not parsed.paths_unsure:
         return av.skipped_message(parsed.skipped, moved=True)
     return f"{av.skipped_message(parsed.skipped)} {UNRELIABLE_HINT}"
+
+
+def _unsure_note(parsed: av.ScanResult) -> str:
+    """Notiz am Fund, wenn der Pfad nicht gesichert ist."""
+    return ABORTED_NOTE if parsed.aborted else (parsed.hint or UNRELIABLE_NOTE)
 
 
 def _now() -> datetime:
@@ -247,6 +267,20 @@ def _valid_audit_state(data: Any) -> bool:
     )
 
 
+class ExcludeRefused(Exception):
+    """Der Ordner darf nicht ausgenommen werden; die Meldung nennt den Grund."""
+
+
+def _mount_points(mountinfo: str) -> list[str]:
+    """Einhängepunkte aus `/proc/self/mountinfo`, Oktal-Escapes (\\040 für Leerzeichen) aufgelöst."""
+    points = []
+    for line in mountinfo.splitlines():
+        fields = line.split(" ")
+        if len(fields) > 4:
+            points.append(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), fields[4]))
+    return points
+
+
 class Defender:
     def __init__(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
@@ -297,8 +331,11 @@ class Defender:
 
     async def start_scans(
         self, hosts: list[Host], kind: str, *, paths: list[str] | None, trigger: str, wait: bool = False,
+        auto_quarantine: bool = True,
     ) -> list[str]:
-        """Legt je Server einen Scan an; `wait=True` wartet bis zum gespeicherten Ergebnis."""
+        """Legt je Server einen Scan an; `wait=True` wartet bis zum gespeicherten Ergebnis.
+
+        `auto_quarantine=False` lässt Funde liegen, auch wenn die Einstellung sie sonst sofort verschiebt."""
         settings = await self._settings()
         if paths is None:
             paths = {
@@ -326,18 +363,20 @@ class Defender:
                 todo.append((host, scan_id))
         if todo:
             if wait:
-                await self._run_many(todo, kind, list(paths))
+                await self._run_many(todo, kind, list(paths), auto_quarantine)
             else:
-                asyncio.ensure_future(self._run_many(todo, kind, list(paths)))
+                asyncio.ensure_future(self._run_many(todo, kind, list(paths), auto_quarantine))
         return ids
 
-    async def _run_many(self, todo: list[tuple[Host, str]], kind: str, paths: list[str]) -> None:
+    async def _run_many(
+        self, todo: list[tuple[Host, str]], kind: str, paths: list[str], auto_quarantine: bool = True,
+    ) -> None:
         sem = asyncio.Semaphore(MAX_PARALLEL)
 
         async def one(host: Host, scan_id: str) -> None:
             try:
                 async with sem:
-                    await self._run_scan(host, scan_id, kind, paths)
+                    await self._run_scan(host, scan_id, kind, paths, auto_quarantine)
             finally:
                 self._running.discard((host.id, kind))
 
@@ -396,7 +435,9 @@ class Defender:
             )).scalar_one_or_none()
         return row is not None
 
-    async def _run_scan(self, host: Host, scan_id: str, kind: str, paths: list[str]) -> None:
+    async def _run_scan(
+        self, host: Host, scan_id: str, kind: str, paths: list[str], auto_quarantine: bool = True,
+    ) -> None:
         settings = await self._settings()
         minutes = 0
         collected = await self._collect_realtime(host, settings) if kind == "watch" else None
@@ -404,7 +445,7 @@ class Defender:
             parsed, output = collected
         else:
             parsed, output, minutes = await self._scan_on_host(host, scan_id, kind, paths, settings)
-        await self._record_scan(host, scan_id, kind, parsed, output, minutes, settings)
+        await self._record_scan(host, scan_id, kind, parsed, output, minutes, settings, may_quarantine=auto_quarantine)
 
     async def _collect_realtime(self, host: Host, settings: dict[str, Any]) -> tuple[av.ScanResult, str] | None:
         """Holt neue Funde aus dem Protokoll des Echtzeit-Wächters und prüft jeden noch einmal über clamd.
@@ -527,9 +568,15 @@ class Defender:
             parsed = av.ScanResult(status="error", error=_describe(exc, timeout_s=limit))
         return parsed, output, minutes
 
+    async def _current_host(self, scan_id: str, host: Host) -> Host:
+        """Der Server, dem der Scan jetzt gehört (nach einem Merge der Zielserver)."""
+        async with self._ctx.db.session() as session:
+            scan = await session.get(ScanRecord, scan_id)
+        return await self._ctx.hosts.get(scan.host_id if scan is not None else host.id) or host
+
     async def _record_scan(
         self, host: Host, scan_id: str, kind: str, parsed: av.ScanResult, output: str, minutes: int,
-        settings: dict[str, Any],
+        settings: dict[str, Any], *, may_quarantine: bool = True,
     ) -> None:
         """Schreibt das Ergebnis an den Scan, legt Funde an, verschiebt sie (wenn erlaubt) und meldet sie."""
         if kind == "watch" and parsed.busy:
@@ -551,17 +598,22 @@ class Defender:
         elif kind == "watch":
             self._watch_busy_since.pop(host.id, None)
 
+        host = await self._current_host(scan_id, host)
         finding_ids: list[str] = []
         known_findings: list[tuple[str, str]] = []  # von dir ignoriert oder wiederhergestellt: kein neuer Fund
         async with self._ctx.db.session() as session:
+            # Erst die Schreibsperre, dann lesen: Ein Merge kann den Scan danach bis zum Speichern nicht mehr verschieben.
+            await session.execute(update(ScanRecord).where(ScanRecord.id == scan_id).values(id=scan_id))
             scan = await session.get(ScanRecord, scan_id)
             if scan is None:
                 return
+            host_id = scan.host_id
             scan.status = parsed.status
             scan.files_scanned = parsed.files_scanned
             scan.infected = parsed.infected
             scan.error = parsed.error or ("; ".join(parsed.errors[:3]) if parsed.errors else None)
             hint = _unreliable_hint(parsed)
+            held_note = None if may_quarantine or not settings.get("auto_quarantine", True) else NO_EXECUTE_NOTE
             if parsed.unreliable and parsed.status == "infected":
                 scan.error = hint
             scan.output_tail = output[-4000:] if output else None
@@ -571,13 +623,15 @@ class Defender:
             for path, sig in parsed.findings:
                 existing = (await session.execute(
                     select(FindingRecord).where(
-                        FindingRecord.host_id == host.id, FindingRecord.path == path, FindingRecord.status == "detected"
+                        FindingRecord.host_id == host_id, FindingRecord.path == path, FindingRecord.status == "detected"
                     ).order_by(FindingRecord.detected_at.desc())
                 )).scalars().first()
                 if existing is not None:
                     existing.scan_id = scan_id
                     if parsed.paths_unsure and not existing.note:
-                        existing.note = parsed.hint or UNRELIABLE_NOTE
+                        existing.note = _unsure_note(parsed)
+                    elif held_note and not existing.note:
+                        existing.note = held_note
                     finding_ids.append(existing.id)
                     continue
                 # Vom Menschen entschieden (ignoriert oder nach Freigabe wiederhergestellt): Dieselbe Datei mit derselben
@@ -585,7 +639,7 @@ class Defender:
                 # unsicheren Pfaden: Ein vorgetäuschter Pfad darf keinen echten Fund als bekannt tarnen.
                 known = None if parsed.paths_unsure else (await session.execute(
                     select(FindingRecord).where(
-                        FindingRecord.host_id == host.id, FindingRecord.path == path,
+                        FindingRecord.host_id == host_id, FindingRecord.path == path,
                         FindingRecord.signature == sig[:255], FindingRecord.status.in_(("ignored", "restored")),
                     ).order_by(FindingRecord.detected_at.desc())
                 )).scalars().first()
@@ -595,16 +649,16 @@ class Defender:
                     continue
                 fid = _new_id("f")
                 session.add(FindingRecord(
-                    id=fid, scan_id=scan_id, host_id=host.id, host_name=host.display_name or host.name, path=path,
+                    id=fid, scan_id=scan_id, host_id=host_id, host_name=host.display_name or host.name, path=path,
                     signature=sig[:255], status="detected", detected_at=_now(),
-                    note=(parsed.hint or UNRELIABLE_NOTE) if parsed.paths_unsure else None,
+                    note=_unsure_note(parsed) if parsed.paths_unsure else held_note,
                 ))
                 finding_ids.append(fid)
 
         if parsed.status == "infected":
             fresh = [(p, s) for p, s in parsed.findings if (p, s) not in known_findings]
             await self._ctx.audit.log(
-                action=f"{EXT_ID}.malware_found", outcome="success", target_type="host", target_id=host.id,
+                action=f"{EXT_ID}.malware_found", outcome="success", target_type="host", target_id=host_id,
                 reason=f"{parsed.infected} Fund(e) bei {KIND_LABEL.get(kind, kind)}",
                 detail={"scan_id": scan_id, "findings": [{"path": p, "signature": s} for p, s in parsed.findings[:20]],
                         "unreliable": parsed.unreliable, "known": len(known_findings)},
@@ -614,7 +668,7 @@ class Defender:
             # Nie automatisch, wenn die Pfade nicht verlässlich sind: Ein Dateiname mit Zeilenumbruch kann einen Fund für
             # einen fremden Pfad vortäuschen (`/etc/passwd: ... FOUND`), und die Quarantäne läuft als root. Dann
             # entscheidet der Mensch (die Funde tragen eine Notiz).
-            if settings.get("auto_quarantine", True) and not parsed.unreliable:
+            if may_quarantine and settings.get("auto_quarantine", True) and not parsed.unreliable:
                 for fid in finding_ids:
                     ok, _msg = await self.quarantine(fid, actor=None)
                     quarantined += int(ok)
@@ -626,6 +680,8 @@ class Defender:
                     f"{len(fresh)} Fund(e): {names}"
                     + (f"\n{quarantined} in Quarantäne verschoben." if quarantined else "\nNoch nicht in Quarantäne – bitte prüfen.")
                 )
+                if held_note:
+                    body += f"\n{held_note}"
                 if known_findings:
                     body += f"\n{len(known_findings)} bekannte(r) Fund(e) ausgelassen (von dir ignoriert oder wiederhergestellt)."
             if fresh or parsed.unreliable:  # nur bekannte Funde: kein Alarm, sie sind entschieden
@@ -836,6 +892,145 @@ class Defender:
             row.status_changed_at = _now()
             return True
 
+    async def _folder_problem(self, host_id: str, normal: str) -> str | None:
+        """Grund, warum der Ordner nicht ausgenommen werden darf, sonst `None`. Fragt die Rechte auf dem Server ab."""
+        if av.is_protected_folder(normal):
+            return ("Systemordner und ihre direkten Unterordner lassen sich nicht per Klick ausnehmen. "
+                    "Das geht nur bewusst unter Einstellungen, „Ausgenommene Ordner“.")
+        host = await self._ctx.hosts.get(host_id)
+        if host is None:
+            return "Der Server ist nicht mehr bekannt."
+        unclear = ("Die Rechte des Ordners ließen sich auf dem Server nicht prüfen. Darum wird er nicht ausgenommen. "
+                   "Das geht nur bewusst unter Einstellungen, „Ausgenommene Ordner“.")
+        # Der Ordner und jeder Elternordner bis `/` in einem Aufruf: Ein Elternordner, in dem andere schreiben dürfen,
+        # ließe den Ordner umbenennen oder austauschen. Ohne -L, damit ein Link in der Kette auffällt.
+        chain = [normal]
+        while chain[-1].count("/") > 1:
+            chain.append(chain[-1].rpartition("/")[0])
+        chain.append("/")
+        try:
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run_argv(
+                    host, ["env", "LC_ALL=C", "stat", "-c", "%a %u %F", "--", *chain], timeout_s=20)
+        except Exception:  # noqa: BLE001 - Verbindung oder Freigabe fehlt: wie nicht ermittelbar
+            return unclear
+        lines = (res.stdout or "").strip().splitlines()
+        parsed = [re.fullmatch(r"([0-7]{3,4}) (\d+) (.+)", line.strip()) for line in lines]
+        if res.exit_code != 0 or len(parsed) != len(chain) or not all(parsed):
+            return unclear
+        for path, found in zip(chain, parsed, strict=True):
+            mode, owner, kind = int(found[1], 8), int(found[2]), found[3]
+            if kind == "symbolic link":
+                return unclear
+            if kind != "directory":
+                return "Das ist kein Ordner auf dem Server." if path == normal else unclear
+            if owner != 0 or mode & 0o022:
+                return (f"{path} gehört nicht root oder ist für andere Konten beschreibbar. Dort könnten Dateien "
+                        "untergeschoben werden, darum wird der Ordner nicht per Klick ausgenommen. Das geht nur "
+                        "bewusst unter Einstellungen, „Ausgenommene Ordner“.")
+        # Die Ausnahme gilt auch für alle Unterordner: Einer, in den andere schreiben dürfen, nähme fremde Dateien mit aus.
+        try:
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run_argv(
+                    host, ["env", "LC_ALL=C", "find", normal, "-xdev", "-type", "d",
+                           "(", "-perm", "/022", "-o", "!", "-uid", "0", ")", "-print", "-quit"], timeout_s=20)
+        except Exception:  # noqa: BLE001 - wie oben: nicht ermittelbar
+            return unclear
+        if res.exit_code != 0:
+            return unclear
+        if (res.stdout or "").strip():
+            return ("Unter dem Ordner liegt ein Unterordner, der nicht root gehört oder in den andere Konten schreiben "
+                    "dürfen. Darum wird er nicht per Klick ausgenommen. Das geht nur bewusst unter Einstellungen, "
+                    "„Ausgenommene Ordner“.")
+        # `find -xdev` überspringt eingehängte Dateisysteme (NFS, USB, Bind-Mounts), die Ausnahme gälte aber auch dort.
+        try:
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run_argv(
+                    host, ["env", "LC_ALL=C", "cat", "/proc/self/mountinfo"], timeout_s=20)
+        except Exception:  # noqa: BLE001 - wie oben: nicht ermittelbar
+            return unclear
+        mounts = _mount_points(res.stdout or "") if res.exit_code == 0 else None
+        if not mounts:
+            return unclear
+        if any(m.startswith(normal + "/") for m in mounts):
+            return ("Unter dem Ordner ist ein weiteres Laufwerk oder Netzlaufwerk eingehängt, dessen Rechte sich hier "
+                    "nicht prüfen lassen. Darum wird er nicht per Klick ausgenommen. Das geht nur bewusst unter "
+                    "Einstellungen, „Ausgenommene Ordner“.")
+        return None
+
+    async def exclude_folder_for_findings(self, host_id: str, folder: str) -> tuple[str, int]:
+        """Nimmt den Ordner in „Ausgenommene Ordner“ auf und schließt die offenen Funde darin.
+
+        Wirft `ExcludeRefused` mit dem Grund, wenn der Ordner nicht zulässig ist oder kein offener Fund direkt darin
+        liegt. Gibt den vereinfachten Pfad und die Zahl der geschlossenen Funde zurück."""
+        # Fundpfade sind wörtlich: Angenommen wird nur ein Pfad in Normalform ohne Sternchen, sonst gälte beim Scan ein anderer Ordner.
+        normal = av.exclude_folder(folder)
+        if normal is None or normal != folder or "*" in folder or av.exclude_folder(normal) != normal:
+            raise ExcludeRefused("Das ist kein gültiger voller Ordnerpfad. Ordner mit * im Namen lassen sich nicht ausnehmen.")
+        if len(normal.encode("utf-8", "replace")) > av.MAX_EXCLUDE_BYTES:
+            raise ExcludeRefused("Der Pfad ist zu lang.")
+        # Ohne offene Datenbank-Sitzung: Die Rechteprüfung geht über SSH.
+        problem = await self._folder_problem(host_id, normal)
+        if problem is not None:
+            raise ExcludeRefused(problem)
+        prefix = normal + "/"
+        # Erst die Ausnahme, dann die Funde: Scheitert das Speichern, bleiben die Funde offen.
+        def add(current: Any) -> list[str]:
+            listed = [e for e in (current or []) if isinstance(e, str)]
+            return listed if normal in [av.exclude_folder(e) for e in listed] else [*listed, normal]
+
+        async with self._ctx.db.session() as session:
+            rows = (await session.execute(
+                select(FindingRecord).where(FindingRecord.host_id == host_id, FindingRecord.status == "detected")
+            )).scalars().all()
+            inside = [r for r in rows if r.path == normal or r.path.startswith(prefix)]
+        # Nur der Ordner, in dem ein offener Fund direkt liegt: `/usr` oder `/srv` nähme sonst ganze Bäume aus.
+        if not any(r.path.rpartition("/")[0] == normal for r in inside):
+            raise ExcludeRefused("In diesem Ordner ist kein Fund offen.")
+        await self._ctx.settings.update("exclude_paths", add)
+        closed = 0
+        async with self._ctx.db.session() as session:
+            for row in inside:
+                found = await session.get(FindingRecord, row.id)
+                if found is not None and found.status == "detected":
+                    found.status = "ignored"
+                    found.status_changed_at = _now()
+                    found.note = FOLDER_EXCLUDED_NOTE.format(folder=normal)
+                    closed += 1
+        return normal, closed
+
+    async def reopen_folder(self, host_id: str, folder: str) -> int:
+        """Öffnet alle Funde wieder, die das Ausnehmen von `folder` auf diesem Server geschlossen hat. Gibt die Zahl zurück."""
+        normal = av.exclude_folder(folder)
+        if normal is None or normal != folder or "*" in folder:
+            raise ExcludeRefused("Das ist kein gültiger voller Ordnerpfad.")
+        prefix = normal + "/"
+        async with self._ctx.db.session() as session:
+            rows = (await session.execute(
+                select(FindingRecord).where(
+                    FindingRecord.host_id == host_id, FindingRecord.status == "ignored",
+                    FindingRecord.note == FOLDER_EXCLUDED_NOTE.format(folder=normal),
+                )
+            )).scalars().all()
+            reopened = 0
+            for row in rows:
+                if not row.path.startswith(prefix):
+                    continue
+                # Je Datei höchstens ein offener Fund, wie bei `reopen`.
+                other = (await session.execute(
+                    select(FindingRecord.id).where(
+                        FindingRecord.host_id == host_id, FindingRecord.path == row.path, FindingRecord.id != row.id,
+                        FindingRecord.status.in_(("detected", "quarantined")),
+                    ).limit(1)
+                )).scalar_one_or_none()
+                if other is not None:
+                    continue
+                row.status = "detected"
+                row.note = None
+                row.status_changed_at = _now()
+                reopened += 1
+            return reopened
+
     async def reopen(self, finding_id: str) -> tuple[bool, str]:
         """Nimmt ein Ignorieren oder Wiederherstellen zurück: Der Fund ist wieder offen und der nächste Scan meldet ihn."""
         async with self._ctx.db.session() as session:
@@ -853,7 +1048,7 @@ class Defender:
                 return False, ("Für diese Datei gibt es schon einen offenen Fund oder sie liegt in der Quarantäne. "
                                "Bitte den bei „Offen & in Quarantäne“ bearbeiten.")
             # Wohin die Datei zurückgelegt wurde, gilt für den wieder offenen Fund nicht mehr.
-            if row.note and row.note.startswith(RESTORED_ELSEWHERE_MARK):
+            if row.note and (row.note.startswith(RESTORED_ELSEWHERE_MARK) or _is_folder_note(row.note)):
                 row.note = None
             row.status = "detected"
             row.status_changed_at = _now()

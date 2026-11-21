@@ -26,6 +26,13 @@ def test_sdk_schnappschuss_ist_aktuell():
     assert cl.dump_json(current) == cl.dump_json(saved), "\n\n" + cl.stale_message("SDK", saved, current, "names")
 
 
+def test_settings_update_ist_im_vertrag():
+    for snapshot in (_saved(), cl.build_sdk_snapshot()):
+        assert snapshot["names"]["nodvard_sdk.context.SettingsHandle"]["methoden"]["update"] == {
+            "key": True, "transform": True,
+        }
+
+
 @pytest.mark.parametrize("name", ["nodvard_sdk.ActionSpec", "nodvard_sdk.actions.ActionSpec"])
 def test_fingerprint_ausnahmen_sind_optional_im_vertrag(name):
     for snapshot in (_saved(), cl.build_sdk_snapshot()):

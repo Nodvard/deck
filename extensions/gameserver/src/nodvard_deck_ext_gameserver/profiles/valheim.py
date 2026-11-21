@@ -24,7 +24,7 @@ $ra=[string]$cim.StartName
 if(-not $L -and $pp.AppStdout){$L=[string]$pp.AppStdout}
 if(-not $W){if($a -match '(?i)-savedir\s+("([^"]*)"|(\S+))'){$W=(@(@($Matches[2],$Matches[3])|?{$_})[0])+'\worlds_local'}elseif($ra -match 'LocalSystem'){$W='C:\Windows\System32\config\systemprofile\AppData\LocalLow\IronGate\Valheim\worlds_local'}elseif($ra){$u=($ra -split '\\')[-1];$W="C:\Users\$u\AppData\LocalLow\IronGate\Valheim\worlds_local"}}
 if(-not $B -and $pp.AppDirectory){$B=Join-Path ([string]$pp.AppDirectory) 'backups'}
-$wn=if($a -match '(?i)-world\s+("([^"]*)"|(\S+))'){@(@($Matches[2],$Matches[3])|?{$_})[0]}else{''}
+$wn=if($a -match '(?i)-world\s+("([^"]*)"|(\S+))'){@(@($Matches[2],$Matches[3])|?{$_})[0]}else{'Dedicated'}
 """
 
 # Ausgewertete Log-Zeilen (echte Beispiele im Test): „Connections N ZDOS:“ (alle 10 Minuten, Spielerzahl), „Got character
@@ -135,7 +135,7 @@ def _age(ts: datetime | None, now: datetime | None) -> int | None:
 
 
 def parse_server_args(args: str) -> dict[str, Any]:
-    tokens = args.split()
+    tokens = re.findall(r'"[^"]*"|\S+', args)
     values: dict[str, list[str]] = {}
     modifiers: list[str] = []
     key: str | None = None
@@ -232,7 +232,7 @@ class ValheimWindowsProfile:
             "version": version_match.group(1) if version_match else None,
             "join_code": join_match.group(2) if join_match else None,
             "join_code_age_s": _age(_parse_ts(join_line), now),
-            "players_online": int(conn_match.group(1)) if conn_match else None,
+            "players_online": int(conn_match.group(1)) if service_state == "running" and conn_match else None,
             "recent_players": recent,
             "last_save_age_s": _age(_parse_ts(raw.get("save")), now),
             "world": {

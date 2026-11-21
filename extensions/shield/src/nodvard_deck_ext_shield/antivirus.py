@@ -378,6 +378,8 @@ class ScanResult:
     timed_out: bool = False
     # Eigener Hinweis für Lauf und Funde, wenn nichts automatisch verschoben wird (statt des allgemeinen zu `unreliable`).
     hint: str | None = None
+    # Die Endmarke fehlte, die Fund-Zeilen waren sonst unauffällig: Der Lauf wurde abgebrochen (Zeitlimit, Verbindung).
+    aborted: bool = False
 
 
 def _q(value: str) -> str:
@@ -433,7 +435,7 @@ def _strip_trailing_wildcards(folder: str) -> str:
     return folder[:end] if stripped else folder
 
 
-_MAX_EXCLUDE_BYTES = 511
+MAX_EXCLUDE_BYTES = 511
 """ClamAV kürzt den Pfad in `match_regex` auf 512 Bytes; ein längerer Ausnahmepfad träfe nie, einer mit genau 512 Bytes auch
 Nachbarn."""
 
@@ -454,12 +456,30 @@ def exclude_folder(folder: object) -> str | None:
     return None if folder == "/" else folder
 
 
+# Ordner, die sich nie per Klick ausnehmen lassen: sie selbst und die erste Ebene darunter.
+_PROTECTED_FOLDERS = frozenset({
+    "/tmp", "/var/tmp", "/dev/shm", "/run", "/etc", "/root", "/home", "/boot", "/bin", "/sbin", "/usr",
+    "/usr/bin", "/usr/sbin", "/usr/local/bin", "/var/www", "/srv",
+    "/var", "/var/lib", "/var/log", "/var/spool", "/var/mail", "/opt", "/mnt", "/media", "/snap",
+    "/usr/local/sbin", "/proc", "/sys",
+})
+_PROTECTED_LIB = re.compile(r"^(/usr)?/lib(32|64|x32)?$")
+
+
+def is_protected_folder(folder: str) -> bool:
+    """Ob ein vereinfachter Pfad ein Systemordner oder dessen direkter Unterordner ist."""
+    for candidate in (folder, folder.rpartition("/")[0] or "/"):
+        if candidate in _PROTECTED_FOLDERS or _PROTECTED_LIB.match(candidate):
+            return True
+    return False
+
+
 def scan_exclude_regex(folder: object) -> str | None:
     """Ausdruck für `clamscan --exclude-dir`, der genau diesen Ordner samt Inhalt trifft, oder `None`.
 
-    Welche Einträge zählen, regelt `exclude_folder`; zu lange Pfade (`_MAX_EXCLUDE_BYTES`) werden nicht ausgenommen."""
+    Welche Einträge zählen, regelt `exclude_folder`; zu lange Pfade (`MAX_EXCLUDE_BYTES`) werden nicht ausgenommen."""
     folder = exclude_folder(folder)
-    if folder is None or len(folder.encode("utf-8", "replace")) > _MAX_EXCLUDE_BYTES:
+    if folder is None or len(folder.encode("utf-8", "replace")) > MAX_EXCLUDE_BYTES:
         return None
     # ClamAV liest den Wert als regulären Ausdruck (POSIX ERE) und sucht ihn im Pfad jedes Ordners; den Anker `^` muss
     # er selbst liefern. Darum Sonderzeichen maskieren (`/srv/a+b` träfe sonst anderes) und hinter dem Namen `/` oder
@@ -790,6 +810,18 @@ def timeout_message(limit_s: int | None = None) -> str:
     return f"Zeitüberschreitung: Der Scan hat zu lange gebraucht und wurde{when} auf dem Server beendet."
 
 
+def aborted_message(limit_s: int | None = None) -> str:
+    """Hinweis zu Funden eines Scans, der vor der Endmarke abbrach; der Tipp nur beim Zeitlimit."""
+    when = f" nach etwa {duration_text(limit_s)}" if limit_s else ""
+    text = (
+        f"Der Scan wurde{when} abgebrochen, bevor er fertig war. Der Rest ist ungeprüft. "
+        "Es wurde nichts automatisch verschoben."
+    )
+    if limit_s:
+        text += " Tipp: große Ordner ausnehmen oder einzelne Ordner gezielt scannen."
+    return text
+
+
 BUSY_MESSAGE = (
     "Scan nicht gestartet: Auf dem Server lief noch ein anderer Scan und wurde nicht rechtzeitig fertig. "
     "Versuch es später noch einmal."
@@ -1029,16 +1061,21 @@ def parse_scan_output(
         # Mit Zeilenumbruch im Dateinamen zerfällt ein Fund in mehrere Zeilen, die letzte kann wie ein Fund für einen
         # anderen Pfad aussehen. `unreliable` sind Läufe mit Pfad am Zeilenanfang ohne Fund, Fund-Zeilen, die nicht zu
         # `Infected files:` passen, Sonderdateien oder Pfaden außerhalb der Wurzeln; ein Fund bleibt ein Fund.
-        paths_unsure = (
-            rc is None or stray > 0 or len(findings) != found_lines
+        lines_unsure = (
+            stray > 0 or len(findings) != found_lines
             or (summary_infected is not None and summary_infected != found_lines)
             or len(findings) < infected_count
             or odd_names > 0 or foreign
         )
+        paths_unsure = rc is None or lines_unsure
+        # Fehlt nur die Endmarke, ist der Lauf abgebrochen worden: eigener Hinweis statt "nicht eindeutig lesbar".
+        hint = None
+        if rc is None and not lines_unsure:
+            hint = aborted_message(limit_s if _has_label(nonblank, mark, "timeout") else None)
         return ScanResult(
             status="infected", files_scanned=files, findings=findings, errors=errors,
             infected=infected_count, unreliable=paths_unsure or skipped > 0, paths_unsure=paths_unsure,
-            skipped=skipped,
+            skipped=skipped, hint=hint, aborted=hint is not None,
         )
     if rc == 0:
         if incomplete:

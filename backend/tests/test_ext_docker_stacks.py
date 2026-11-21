@@ -189,6 +189,28 @@ def test_problems_are_counted_separately():
     assert (out["state"], out["problems"]) == ("partial", 2)
 
 
+def test_an_exited_member_of_a_partly_running_stack_is_a_problem():
+    st = _st()
+    rows = [row(name="app", state="running"), row(name="worker", state="exited", status="Exited (1) 2 minutes ago")]
+    out = st.stack_out(st.parse_members(ps(*rows))[0], None)
+    assert (out["state"], out["problems"]) == ("partial", 1)
+
+
+def test_a_clean_exit_or_a_stopped_stack_is_no_problem():
+    st = _st()
+    init = row(name="init", state="exited", status="Exited (0) 2 minutes ago")
+    running = row(name="app", state="running")
+    assert st.stack_out(st.parse_members(ps(running, init))[0], None)["problems"] == 0
+    stopped = row(name="worker", state="exited", status="Exited (1) 2 minutes ago")
+    assert st.stack_out(st.parse_members(ps(stopped, init))[0], None)["problems"] == 0
+
+
+def test_a_non_numeric_data_compose_folder_is_not_portainer():
+    st = _st()
+    stack = st.parse_members(ps(row(working_dir="/data/compose/shop", config_files="/data/compose/shop/compose.yml")))[0]
+    assert stack.source == "compose"
+
+
 def test_usage_per_stack():
     st = _st()
     stacks = st.parse_members(PS)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -58,6 +59,115 @@ async def test_settings_roundtrip_keeps_internal_keys(client, db_session, demo_e
     body = r.json()
     assert body["values"] == {"internal": [1], "connections": values["connections"], "interval_s": 30}
     assert body["secrets"] == [{"label": "demo-token:pve2", "title": "API-Token", "description": None, "item": "pve2", "is_set": False, "optional": False}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active", [False, True])
+@pytest.mark.parametrize("method", ["set", "update"])
+async def test_settings_save_keeps_concurrent_hidden_changes(client, file_db, demo_extension, monkeypatch, active, method):
+    from nodvard_deck.api.v1 import extension_settings
+    from nodvard_deck.ext.context import SettingsHandle
+
+    runtime = get_extension_runtime()
+    runtime.discovered["demo"].manifest.settings_schema = {
+        **SCHEMA, "properties": {**SCHEMA["properties"], "history": {"type": "array", "x-hidden": True}},
+    }
+    async with file_db() as session:
+        session.add(ExtensionRecord(
+            id="demo", version="1", api_version="0.1.0", state="enabled" if active else "disabled",
+            settings={"interval_s": 10, "history": ["alt"], "internal": True},
+        ))
+        await session.commit()
+    headers = await _owner(client)
+    loaded = SimpleNamespace(instance=None)
+    handle = SettingsHandle(loaded, "demo")
+    loaded.ctx = SimpleNamespace(settings=handle)
+    if active:
+        runtime.loaded["demo"] = loaded
+
+    read = asyncio.Event()
+    resume = asyncio.Event()
+    original = extension_settings._record
+
+    async def paused_record(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        read.set()
+        await resume.wait()
+        return result
+
+    monkeypatch.setattr(extension_settings, "_record", paused_record)
+    save = asyncio.create_task(client.put(
+        "/api/v1/extensions/demo/settings", headers=headers,
+        json={"values": {"interval_s": 30, "history": ["alt"]}},
+    ))
+    try:
+        await asyncio.wait_for(read.wait(), timeout=5)
+        if method == "update":
+            await handle.update("history", lambda value: [*value, "neu"])
+        else:
+            await handle.set({"interval_s": 10, "history": ["alt", "neu"], "internal": True})
+    finally:
+        resume.set()
+        response = await asyncio.wait_for(save, timeout=5)
+        runtime.loaded.pop("demo", None)
+
+    assert response.status_code == 200, response.text
+    expected = {"interval_s": 30, "history": ["alt", "neu"], "internal": True}
+    assert response.json()["values"] == expected
+    assert await handle.get() == expected
+
+
+@pytest.mark.asyncio
+async def test_settings_save_holds_lock_until_commit(client, file_db, demo_extension, monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from nodvard_deck.ext.context import SettingsHandle
+    from nodvard_deck.services.extension_settings import lock_for
+
+    runtime = get_extension_runtime()
+    runtime.discovered["demo"].manifest.settings_schema = {
+        **SCHEMA, "properties": {**SCHEMA["properties"], "history": {"type": "array", "x-hidden": True}},
+    }
+    async with file_db() as session:
+        session.add(ExtensionRecord(
+            id="demo", version="1", api_version="0.1.0", state="disabled",
+            settings={"interval_s": 10, "history": ["alt"]},
+        ))
+        await session.commit()
+    headers = await _owner(client)
+    handle = SettingsHandle(SimpleNamespace(instance=None), "demo")
+    committing = asyncio.Event()
+    resume = asyncio.Event()
+    original = AsyncSession.commit
+
+    async def paused_commit(session):
+        if not committing.is_set() and any(
+            isinstance(row, ExtensionRecord) and row.settings.get("interval_s") == 30
+            for row in session.identity_map.values()
+        ):
+            committing.set()
+            await resume.wait()
+        await original(session)
+
+    monkeypatch.setattr(AsyncSession, "commit", paused_commit)
+    save = asyncio.create_task(client.put(
+        "/api/v1/extensions/demo/settings", headers=headers,
+        json={"values": {"interval_s": 30, "history": ["alt"]}},
+    ))
+    change = None
+    try:
+        await asyncio.wait_for(committing.wait(), timeout=5)
+        assert lock_for("demo").locked()
+        change = asyncio.create_task(handle.update("history", lambda value: [*value, "neu"]))
+        await asyncio.sleep(0)
+    finally:
+        resume.set()
+        response = await asyncio.wait_for(save, timeout=5)
+        if change is not None:
+            await asyncio.wait_for(change, timeout=5)
+
+    assert response.status_code == 200, response.text
+    assert await handle.get() == {"interval_s": 30, "history": ["alt", "neu"]}
 
 
 @pytest.mark.asyncio

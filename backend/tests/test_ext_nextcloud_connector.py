@@ -359,3 +359,23 @@ def test_dav_url_second_guard_catches_dot_segments_on_its_own(monkeypatch, segme
     connector = NextcloudConnector(ctx=None, base_url="https://cloud.example.com", username="alice", password="x")
     with pytest.raises(InvalidPathError):
         connector._dav_url("egal")
+
+
+@pytest.mark.parametrize(
+    ("error", "fragment"),
+    [
+        ("[Errno 111] Connection refused", "lehnt die Verbindung ab"),
+        ("[Errno -2] Name or service not known", "lässt sich nicht auflösen"),
+        ("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed", "Selbstsigniertes Zertifikat erlauben"),
+        ("[SSL: WRONG_VERSION_NUMBER] wrong version number", "Verschlüsselung passt nicht"),
+        ("All connection attempts failed", "nicht erreichbar"),
+        ("", "nicht erreichbar"),
+    ],
+)
+def test_connection_errors_get_fixed_german_sentences(error, fragment):
+    import httpx
+    from nodvard_deck_ext_nextcloud.connector import _transport_problem
+
+    text = _transport_problem("PROPFIND", "/", "https://cloud.test", httpx.ConnectError(error))
+    assert fragment in text
+    assert not any(raw in text for raw in ("Errno", "SSL", "refused", "attempts", "PROPFIND", "->"))

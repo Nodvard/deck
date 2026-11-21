@@ -33,6 +33,23 @@ async def _has_secret(db_session, label: str) -> bool:
     return (await db_session.execute(select(Secret.id).where(Secret.label == label))).first() is not None
 
 
+async def _add_in_settings(client, headers, ext_id: str, conn: dict) -> list[str]:
+    """Legt `conn` über das Einstellungsformular an; ein übrig gebliebenes Token geht dabei mit Passwort weg."""
+    current = (await client.get(f"/api/v1/extensions/{ext_id}/settings", headers=headers)).json()["values"]
+    r = await client.put(
+        f"/api/v1/extensions/{ext_id}/settings",
+        json={"values": {"connections": [*(current.get("connections") or []), conn]}}, headers=headers,
+    )
+    assert r.status_code == 403 and r.json()["code"] == "confirm_required", r.text
+    r = await client.put(
+        f"/api/v1/extensions/{ext_id}/settings",
+        json={"current_password": "correct-horse-battery", "values": {"connections": [*(current.get("connections") or []), conn]}},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["secrets_cleared"]
+
+
 @pytest.mark.asyncio
 async def test_ntfy_token_is_removed_when_server_url_changes(client, db_session, test_settings):
     headers = await _owner_with(client, db_session, test_settings, "ntfy")
@@ -146,30 +163,46 @@ async def test_connection_token_is_removed_on_new_address_and_on_removal(client,
     assert await _has_secret(db_session, f"{label}:pve1")
 
     # Andere Felder und dieselbe Adresse (nur Schluss-Schrägstrich): das Token bleibt.
-    r = await client.put(f"{base}/pve1", json={"tls_insecure_skip_verify": True, "base_url": "https://192.168.2.10:8006/"}, headers=headers)
+    r = await client.put(f"{base}/pve1", json={"enabled": False, "base_url": "https://192.168.2.10:8006/"}, headers=headers)
     assert r.status_code == 200, r.text
     assert r.json()["has_token"] is True
     # Andere Schreibweise derselben Adresse (Gross-/Kleinschreibung, Standardport): ebenfalls dasselbe Ziel.
     r = await client.put(f"{base}/pve1", json={"base_url": "HTTPS://192.168.2.10:8006//"}, headers=headers)
     assert r.status_code == 200, r.text
     assert r.json()["has_token"] is True
+    # Anderer Pfad: im Zweifel ein neues Ziel. Mit Token lehnt die Route ab, das Token geht nicht mit.
+    kept = (await client.get(base, headers=headers)).json()[0]["base_url"]
     r = await client.put(f"{base}/pve1", json={"base_url": "https://192.168.2.10:8006/api2"}, headers=headers)
-    assert r.json()["has_token"] is False  # anderer Pfad: im Zweifel ein neues Ziel
-    assert (await client.post(f"{base}/pve1/token", json={"value": "tok-geheim"}, headers=headers)).status_code == 204
+    assert r.status_code == 409, r.text
+    assert await _has_secret(db_session, f"{label}:pve1")
+    assert (await client.get(base, headers=headers)).json()[0]["base_url"] == kept
 
+    r = await client.put(f"{base}/pve1", json={"base_url": "https://angreifer:8006"}, headers=headers)
+    assert r.status_code == 409, r.text
+    assert (await client.get(base, headers=headers)).json()[0]["base_url"] == kept
+
+    # Erst ohne Token (über den Kern, mit Passwort) zieht die Verbindung um.
+    gone = await client.request(
+        "DELETE", f"/api/v1/extensions/{ext_id}/secrets", params={"label": f"{label}:pve1"},
+        json={"current_password": "correct-horse-battery"}, headers=headers,
+    )
+    assert gone.status_code == 204, gone.text
     r = await client.put(f"{base}/pve1", json={"base_url": "https://angreifer:8006"}, headers=headers)
     assert r.status_code == 200, r.text
     assert r.json()["has_token"] is False
     assert not await _has_secret(db_session, f"{label}:pve1")
 
-    # Entfernen: auch ein neues Token verschwindet, eine neue Verbindung gleichen Namens beginnt leer.
+    # Entfernen: die Verbindung ist weg, eine neue gleichen Namens beginnt nie mit dem alten Token.
     assert (await client.post(f"{base}/pve1/token", json={"value": "tok-zwei"}, headers=headers)).status_code == 204
     assert (await client.delete(f"{base}/pve1", headers=headers)).status_code == 204
-    assert not await _has_secret(db_session, f"{label}:pve1")
     again = await client.post(
         base, json={"name": "pve1", "base_url": "https://192.168.2.11:8006", "token_id": _TOKEN_ID}, headers=headers,
     )
-    assert again.json()["has_token"] is False
+    assert again.status_code == 409, again.text
+    assert await _add_in_settings(
+        client, headers, ext_id, {"name": "pve1", "base_url": "https://192.168.2.11:8006", "token_id": _TOKEN_ID},
+    ) == [f"{label}:pve1"]
+    assert (await client.get(base, headers=headers)).json()[0]["has_token"] is False
 
 
 @pytest.mark.asyncio
@@ -184,8 +217,13 @@ async def test_new_connection_does_not_inherit_a_leftover_token(client, db_sessi
     created = await client.post(
         base, json={"name": "pve7", "base_url": "https://angreifer:8006", "token_id": _TOKEN_ID}, headers=headers,
     )
-    assert created.status_code == 201, created.text
-    assert created.json()["has_token"] is False
+    assert created.status_code == 409, created.text
+    assert (await client.get(base, headers=headers)).json() == []
+    assert await _has_secret(db_session, f"{label}:pve7")
+    assert await _add_in_settings(
+        client, headers, ext_id, {"name": "pve7", "base_url": "https://angreifer:8006", "token_id": _TOKEN_ID},
+    ) == [f"{label}:pve7"]
+    assert (await client.get(base, headers=headers)).json()[0]["has_token"] is False
     assert not await _has_secret(db_session, f"{label}:pve7")
 
     # Dasselbe über das Einstellungs-Formular.

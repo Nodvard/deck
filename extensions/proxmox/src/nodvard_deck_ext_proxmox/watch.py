@@ -22,7 +22,7 @@ from .node_health import (
     temperature_limit,
     temperature_setting,
 )
-from .storage import format_bytes, is_shared
+from .storage import format_bytes, is_active, is_shared
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -244,12 +244,9 @@ def _skip_names(raw: Any) -> set[str]:
 
 
 def _pool_reading(pool: dict[str, Any]) -> tuple[int, float, float] | None:
-    """(ganze Prozent, belegt, gesamt) oder None, wenn der Speicher gerade nichts Verlässliches sagt: nicht aktiv,
-    abgeschaltet oder ohne Größe (ein nicht erreichbares NFS-Ziel meldet keine Zahlen). Solche Speicher gelten als
-    "unbekannt", nie als "voll"."""
-    for field in ("active", "enabled"):
-        if str(pool.get(field, 1)).strip().lower() in ("0", "false", "none", ""):
-            return None
+    """(ganze Prozent, belegt, gesamt) oder None ohne verlässliche Belegung."""
+    if not is_active(pool) or str(pool.get("enabled", 1)).strip().lower() in ("0", "false", "none", ""):
+        return None
     try:
         total, used = float(pool.get("total")), float(pool.get("used"))
     except (TypeError, ValueError):
@@ -428,6 +425,7 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
         pools_complete = conn_error is None  # nur dann ist "Speicher nicht mehr da" verlässlich
         pools_seen: set[str] = set()
         shared_done: set[str] = set()
+        reachability: dict[str, tuple[dict[str, Any], str, str | None]] = {}
         await handle(
             f"conn:{conn_name}", conn_error is not None, UNREACHABLE_STREAK,
             (Severity.CRITICAL, f"Proxmox '{conn_name}' nicht erreichbar",
@@ -462,6 +460,11 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
                 shared = is_shared(pool)
                 pool_key = f"storage:{conn_name}/{name}" if shared else f"storage:{conn_name}/{node_name}/{name}"
                 pools_seen.add(pool_key)
+                reach_key = f"{pool_key}:unreachable"
+                pools_seen.add(reach_key)
+                if str(pool.get("enabled", 1)).strip().lower() not in ("0", "false", "none", ""):
+                    if reach_key not in reachability or not is_active(pool):
+                        reachability[reach_key] = (pool, node_name, node_host_id)
                 reading = _pool_reading(pool)
                 if reading is None or pool_key in shared_done:
                     continue
@@ -493,6 +496,18 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
             for pool in pools:
                 await check_zfs(conn_name, node_name, node_host_id, pool)
             await check_zfs_gone(conn_name, node_name, node_host_id, {pool["name"] for pool in pools})
+        for key, (pool, node_name, node_host_id) in reachability.items():
+            if is_shared(pool) and is_active(pool) and not pools_complete:
+                continue
+            name = str(pool["storage"])
+            where = f"(geteilt, {conn_name})" if is_shared(pool) else f"auf {node_name}"
+            await handle(
+                key, not is_active(pool), UNREACHABLE_STREAK,
+                (Severity.CRITICAL, f"Speicher {name} {where} nicht erreichbar",
+                 f"Proxmox meldet den Speicher {name} {where} als nicht erreichbar. Prüfe den Speicher in Proxmox."),
+                f"Speicher {name} {where} wieder erreichbar", node_host_id,
+                path=f"{PAGE_PATH}?tab=storage&host={node_host_id}" if node_host_id else f"{PAGE_PATH}?tab=storage",
+            )
         if pools_complete:
             # Ein verschwundener (oder jetzt ausgenommener) Speicher verliert seinen Zustand, aber nur, wenn alle Knoten der
             # Verbindung geantwortet haben.

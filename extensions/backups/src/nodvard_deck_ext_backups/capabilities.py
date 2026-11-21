@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from typing import Any
 
 from nodvard_sdk import ActionResult, Actor, DryRunReport, Risk
@@ -29,13 +30,37 @@ ConnectorFactory = Callable[[str], Awaitable[ProxmoxBackupConnector]]
 ConnectorsFactory = Callable[[], Awaitable[dict[str, ProxmoxBackupConnector]]]
 
 
+class RetryGuestMismatch(NodvardError):
+    """Die angefragte Gast-ID gehört nicht zum gespeicherten Job."""
+
+
 def _job_ref(connection: str, job_id: str, vmid: str) -> str:
-    # Der Verbindungsname gehört dazu, weil dieselbe VMID auf mehreren Proxmox-Instanzen vorkommen kann.
-    return f"{connection}--{job_id}--{vmid}"
+    """Hex der JSON-Liste (Verbindung, Job, VMID): enthält nie „--“, ist also von der alten Form nicht zu verwechseln."""
+    return "j2" + json.dumps([connection, job_id, vmid], separators=(",", ":")).encode().hex()
+
+
+class AmbiguousJobRef(NodvardError):
+    """Eine alte Job-Kennung lässt sich nicht eindeutig einer Verbindung und einem Job zuordnen."""
+
+
+def split_legacy_job_ref(job_ref: str) -> tuple[str, str, str] | None:
+    """Zerlegt `<Verbindung>--<Job>--<VMID>`, aber nur, wenn es allein von der Schreibweise her genau eine Zerlegung gibt."""
+    parts = job_ref.split("--")
+    if len(parts) != 3 or "---" in job_ref or not all(parts) or not parts[2].isdigit():
+        return None
+    return parts[0], parts[1], parts[2]
 
 
 def _parse_job_ref(job_ref: str) -> tuple[str, str, str]:
-    connection, job_id, vmid = job_ref.split("--", 2)
+    if "--" in job_ref:  # alte Form `<Verbindung>--<Job>--<VMID>` aus einer noch offenen Seite
+        connection, job_id, vmid = job_ref.split("--", 2)
+        return connection, job_id, vmid
+    try:
+        connection, job_id, vmid = json.loads(bytes.fromhex(job_ref.removeprefix("j2")).decode())
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Ungültige Job-Referenz.") from exc
+    if not job_ref.startswith("j2") or not all(isinstance(p, str) for p in (connection, job_id, vmid)):
+        raise ValueError("Ungültige Job-Referenz.")
     return connection, job_id, vmid
 
 
@@ -215,6 +240,7 @@ class ProxmoxBackupProvider:
                     rows.append(
                         {
                             "job_ref": _job_ref(connection, str(job.get("id")), vmid),
+                            "job_id": str(job.get("id")),
                             "vmid": vmid,
                             "name": name,
                             "host_id": host_id,
@@ -307,6 +333,32 @@ class ProxmoxBackupProvider:
             )
         return {"running": running, "errors": errors}
 
+    async def resolve_job_ref(self, job_ref: str) -> tuple[str, str, str]:
+        """Verbindung, Job und VMID einer Kennung."""
+        connection, job_id, vmid, _connector = await self.resolve_job(job_ref)
+        return connection, job_id, vmid
+
+    async def resolve_job(self, job_ref: str) -> tuple[str, str, str, ProxmoxBackupConnector]:
+        """Wie `resolve_job_ref`, dazu die Verbindung. Eine alte Kennung gilt nur mit genau zwei Trennern `--`,
+        unabhängig davon, welche Verbindungen gerade eingerichtet sind."""
+        if "--" not in job_ref:
+            try:
+                connection, job_id, vmid = _parse_job_ref(job_ref)
+            except ValueError:
+                raise NodvardError("Unbekannter Backup-Job.") from None
+            return connection, job_id, vmid, await self._connector_for(connection)
+        if job_ref.count("--") < 2:
+            raise NodvardError("Unbekannter Backup-Job.")
+        parts = split_legacy_job_ref(job_ref)
+        if parts is None:
+            raise AmbiguousJobRef("Die Kennung dieses Backup-Jobs ist nicht eindeutig. Bitte die Seite neu laden.")
+        connection, job_id, vmid = parts
+        connectors = await self._connectors_factory()
+        connector = connectors.get(connection)
+        if connector is None:
+            raise NodvardError(f"Backup-Verbindung '{connection}' ist nicht (mehr) konfiguriert.")
+        return connection, job_id, vmid, connector
+
     async def _connector_for(self, connection: str) -> ProxmoxBackupConnector:
         connector = (await self._connectors_factory()).get(connection)
         if connector is None:
@@ -326,7 +378,7 @@ class ProxmoxBackupProvider:
         return await self._guest_tasks(connection, connector, tasks, vmid, group_job=group)
 
     async def job_history(self, job_ref: str) -> list[dict[str, Any]]:
-        connection, job_id, vmid = _parse_job_ref(job_ref)
+        connection, job_id, vmid = await self.resolve_job_ref(job_ref)
         connector = await self._connector_for(connection)
         return [
             {
@@ -345,7 +397,7 @@ class ProxmoxBackupProvider:
         """Grund für den neuesten fehlgeschlagenen Lauf des Jobs für den Gast (oder den Lauf `upid`), in Klartext.
 
         `None` ohne solchen Lauf; ist das Protokoll nicht lesbar (Recht `Sys.Audit` fehlt), zählt nur der Status."""
-        connection, job_id, vmid = _parse_job_ref(job_ref)
+        connection, job_id, vmid = await self.resolve_job_ref(job_ref)
         connector = await self._connector_for(connection)
         task = next(
             (t for t in await self._job_tasks(connection, connector, job_id, vmid)
@@ -364,7 +416,7 @@ class ProxmoxBackupProvider:
 
     async def retry(self, job_ref: str) -> ActionRequest:
         """Gibt einen Vorschlag zurück; der Aufrufer reicht ihn an `ctx.actions.propose()` weiter (durchs Gate)."""
-        connection, job_id, vmid = _parse_job_ref(job_ref)
+        connection, job_id, vmid = await self.resolve_job_ref(job_ref)
         connectors = await self._connectors_factory()
         connector = connectors.get(connection)
         if connector is None:
@@ -374,11 +426,19 @@ class ProxmoxBackupProvider:
         if job is None:
             raise NodvardError(f"Backup-Job '{job_id}' existiert nicht (mehr).")
 
+        resources = await connector.guest_resources() if not str(job.get("vmid") or "").strip() else []
+        allowed_vmids = job_vmids(job, resources)
+        if vmid not in allowed_vmids:
+            raise RetryGuestMismatch(
+                f"Gast-ID {vmid or '(leer)'} gehört nicht zum Backup-Job '{job_id}'. "
+                "Du kannst nur Gäste dieses Jobs erneut sichern."
+            )
+
         node = job.get("node")
         if not node:
             # Job mit Knoten „-- Alle --“ (PVE-Standard): verlässlich ist der Knoten, auf dem der Gast liegt,
             # sonst der des letzten Laufs. Bei Sammel-Jobs hat der keine Gast-ID und zählt nur mit `group_job`.
-            resources = await connector.guest_resources()
+            resources = resources or await connector.guest_resources()
             node = next((r.get("node") for r in resources if str(r.get("vmid")) == vmid and r.get("node")), None)
             if not node:
                 group = job if len(job_vmids(job, resources)) > 1 else None
@@ -461,6 +521,12 @@ class BackupActionExecutor:
                     return ActionResult(
                         success=False,
                         error="Der Backup-Job wurde seit dem Vorschlag geändert. Es wurde nichts gestartet – bitte neu vorschlagen.",
+                    )
+                resources = [] if str(current.get("vmid") or "").strip() else await connector.guest_resources()
+                if str(vmid) not in job_vmids(current, resources):
+                    return ActionResult(
+                        success=False,
+                        error=f"Gast {vmid} gehört nicht mehr zum Backup-Job '{job_id}'. Es wurde nichts gestartet – bitte neu vorschlagen.",
                     )
                 options = req.payload["options"]
             try:

@@ -44,6 +44,9 @@ class EventBus:
         from .action_output import OUTPUT_PERMISSION, redact_action_event
         from .ws_hub import get_ws_hub
 
+        if not rbac.event_reaches_ws(event.name):
+            return
+
         # Die RBAC-Filterung hängt am Event-Namen (`core.rbac.permission_for_event()`), nicht am Kanal: `events` bleibt
         # ein Kanal, einzelne Nachrichten sind je nach Berechtigung sichtbar.
         message = {"name": event.name, "data": event.payload, "correlation_id": event.correlation_id}

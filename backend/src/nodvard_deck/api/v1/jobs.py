@@ -10,12 +10,13 @@ from pydantic import BaseModel
 
 from ...core.scheduler import CORE_SCHEDULER_EXT_ID, get_scheduler_service
 from ...ext.runtime import get_extension_runtime
-from ...models import Job, JobRun
+from ...models import Job, JobRun, User
+from ...services import audit as audit_service
 from ...services import jobs as jobs_service
 from ...services.backups import JOB_KEY as BACKUP_JOB_KEY
 from ...services.reachability import JOB_KEY as REACHABILITY_JOB_KEY
 from ...services.update_check import JOB_KEY as UPDATE_CHECK_JOB_KEY
-from ..deps import SessionDep, require_permission
+from ..deps import CurrentUser, SessionDep, require_permission
 from ..models import RequestModel
 from ..responses import error_responses
 
@@ -248,11 +249,28 @@ async def get_run_output(run_id: str, session: SessionDep) -> dict[str, str]:
     dependencies=[Depends(require_permission("jobs.run"))],
     responses=error_responses(401, 403, 404, 409, 507),
 )
-async def cancel_run(run_id: str, session: SessionDep) -> dict[str, bool]:
+async def cancel_run(run_id: str, session: SessionDep, user: CurrentUser) -> dict[str, bool]:
     run = await jobs_service.get_run(session, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Lauf.")
+    job = await jobs_service.get_job(session, run.job_id) if run.job_id else None
+    if job is not None and job.ext_id is None and job.ext_job_key in _OWNER_ONLY_CORE_JOBS and not user.is_owner:
+        # Starten darf die Sicherung nur der Owner, also auch nur er sie abbrechen.
+        await _audit_cancel(session, user, run, outcome="denied", reason="owner_only")
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Die automatische Sicherung kann nur der Owner abbrechen.",
+        )
     cancelled = get_scheduler_service().cancel_run(run_id)
     if not cancelled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Lauf ist nicht (mehr) aktiv.")
+    await _audit_cancel(session, user, run, outcome="success")
     return {"cancelled": True}
+
+
+async def _audit_cancel(session, user: User, run: JobRun, *, outcome: str, reason: str | None = None) -> None:
+    await audit_service.log(
+        session, actor_type="user", actor_id=user.id, action="job.run.cancelled", outcome=outcome,
+        target_type="job_run", target_id=run.id, reason=reason, detail={"job_id": run.job_id, "ext_id": run.ext_id},
+    )

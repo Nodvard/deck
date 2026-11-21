@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import posixpath
 import re
 import secrets
 import stat as statmod
 import tempfile
+import unicodedata
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
@@ -177,26 +179,234 @@ async def _entry_after_rename(sftp: Any, path: PurePosixPath) -> FileEntry:
     return _attrs_to_entry(path, attrs)
 
 
-async def _write_target(sftp: Any, path: PurePosixPath) -> str:
-    """Der Pfad, der beim Schreiben ersetzt wird. Ein Link wird bis zur echten Datei verfolgt (wie beim direkten
-    Schreiben), sonst würde das Ersetzen den Link selbst austauschen."""
-    target = str(path)
-    with contextlib.suppress(Exception):  # gibt es das Ziel (noch) nicht, wird es neu angelegt
-        if _is_symlink(await sftp.lstat(target)):
-            target = str(await sftp.realpath(target))
-    return target
+_LOGIN_UNKNOWN = (
+    " Mit welchem Konto Deck auf dem Server angemeldet ist, ließ sich nicht feststellen (Deck konnte dort keine kurze "
+    "Probedatei anlegen), deshalb gilt nur root als vertraut."
+)
+
+
+class _UntrustedLink(Exception):
+    readable = True
+
+    def __init__(self, login_known: bool = True) -> None:
+        super().__init__(
+            "Im Zielpfad liegt eine Verknüpfung, die weder root noch dem Konto gehört, mit dem Deck auf dem Server "
+            "angemeldet ist. Zum Schutz des Ziels wird ihr nicht gefolgt. Lade die Datei direkt an den echten Ort hoch "
+            "oder entferne die Verknüpfung." + ("" if login_known else _LOGIN_UNKNOWN)
+        )
+
+
+class _UncheckableLink(Exception):
+    readable = True
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Der Server zeigt das Ziel einer Verknüpfung im Zielpfad nicht Schritt für Schritt an, so lässt sie sich nicht "
+            "prüfen. Zum Schutz des Ziels wird ihr nicht gefolgt. Lade die Datei direkt an den echten Ort hoch."
+        )
+
+
+_WINDOWS_HINT = (
+    " Ist das ein Windows-Server? Dann stell in den Einstellungen des Servers das Betriebssystem auf Windows."
+)
+
+
+class _SwappableFolder(Exception):
+    readable = True
+
+    def __init__(self, login_known: bool = True, windows: bool = False, drive_path: bool = False) -> None:
+        if windows:
+            super().__init__(
+                "Ein Ordner im Zielpfad meldet auf diesem Windows-Server Rechte, die sich nicht als sicher einstufen lassen. "
+                "Deshalb wird dorthin nicht hochgeladen. Lade die Datei in einen anderen Ordner hoch, etwa in den "
+                "Benutzerordner des angemeldeten Kontos."
+            )
+            return
+        super().__init__(
+            "Ein Ordner im Zielpfad gehört einem anderen Konto als root oder dem Konto, mit dem Deck angemeldet ist, oder "
+            "ein anderes Konto darf ihn ändern. Er ließe sich während des Hochladens austauschen, deshalb wird dorthin "
+            "nicht hochgeladen. Verbinde den Server mit dem Konto, dem der Ordner gehört, oder lade die Datei in einen "
+            "Ordner von root und verschiebe sie dort."
+            + ("" if login_known else _LOGIN_UNKNOWN)
+            + (_WINDOWS_HINT if drive_path else "")
+        )
+
+
+class _NotAFolder(Exception):
+    readable = True
+
+    def __init__(self) -> None:
+        super().__init__("Ein Teil des Zielpfads ist kein Ordner, der Pfad lässt sich nicht auflösen. Es wurde nichts geschrieben.")
+
+
+_MAX_LINK_HOPS = 40
+
+# Steht im Gang für ein abschließendes `/` oder `/.` im Linkziel: Der Teil davor muss ein vorhandener Ordner sein. Kein
+# Dateiname kann so heißen.
+_FOLDER_REQUIRED = "/."
+
+_WRITABLE_FOR_OTHERS = statmod.S_IWGRP | statmod.S_IWOTH
+
+
+# SFTP-Statuscode „nicht vorhanden“ (`SSH_FX_NO_SUCH_FILE`).
+_SFTP_NO_SUCH_FILE = 2
+
+
+# So viel vom Fehlertext des Servers erscheint in einer Meldung.
+_MAX_REASON = 120
+
+
+def _server_reason(text: str) -> str:
+    """Der Fehlertext des Servers einzeilig, ohne Steuer- und Formatzeichen und gekürzt."""
+    text = "".join(" " if unicodedata.category(ch).startswith(("C", "Z")) else ch for ch in text)
+    text = " ".join(text.split()) or "ohne Angabe"
+    return text if len(text) <= _MAX_REASON else text[: _MAX_REASON - 1] + "…"
+
+
+class _UnreadablePath(Exception):
+    readable = True
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            f"Ein Teil des Zielpfads ließ sich auf dem Server nicht prüfen ({_server_reason(reason)}). Zum Schutz des Ziels wurde nichts "
+            "geschrieben. Prüfe die Rechte der Ordner im Zielpfad oder lade die Datei an einen anderen Ort hoch."
+        )
+
+
+async def _lstat_or_none(sftp: Any, path: str) -> Any | None:
+    """Die Attribute von `path` ohne Links zu folgen, `None` nur, wenn es den Eintrag nicht gibt."""
+    try:
+        return await sftp.lstat(path)
+    except Exception as exc:
+        if getattr(exc, "code", None) == _SFTP_NO_SUCH_FILE:
+            return None
+        # Nicht lesbar heißt nicht „fehlt“: Der Rest des Pfads würde sonst ungeprüft angehängt.
+        raise _UnreadablePath(getattr(exc, "reason", None) or str(exc) or type(exc).__name__) from exc
+
+
+async def _login_uid(sftp: Any) -> int | None:
+    """Die UID des angemeldeten Kontos, abgelesen an einer neu angelegten Probedatei (`None`, wenn sich keine anlegen
+    lässt oder der Server keinen Besitzer meldet)."""
+    # SFTP nennt die eigene UID nicht, und der Startordner kann root gehören. Eine neue Datei gehört immer dem angemeldeten
+    # Konto; gelesen wird am offenen Griff, damit ein Tausch des Namens nichts ändert. Befehle sind bei Dateiaufrufen
+    # nicht freigegeben, `id -u` scheidet also aus.
+    places = ["/tmp"]
+    with contextlib.suppress(Exception):
+        places.append(str(await sftp.realpath(".")))
+    for place in places:
+        probe = posixpath.join(place, f".nodvard-konto-{secrets.token_hex(6)}")
+        try:
+            f = await sftp.open(probe, "xb")
+        except Exception:  # noqa: BLE001, S112 - dort nicht beschreibbar oder der Name ist belegt
+            continue
+        try:
+            async with f:
+                attrs = await f.stat()
+        except Exception:  # noqa: BLE001 - nicht lesbar heißt unbekannt
+            attrs = None
+        finally:
+            await _discard(sftp, probe)
+        uid = getattr(attrs, "uid", None)
+        if uid is not None:
+            return uid
+    return None
+
+
+async def _trusted_uids(sftp: Any) -> tuple[frozenset[int], bool]:
+    """root und das angemeldete Konto, dazu ob sich das Konto feststellen ließ."""
+    uid = await _login_uid(sftp)
+    return (frozenset({0}), False) if uid is None else (frozenset({0, uid}), True)
+
+
+def _check_folder(
+    folder: Any | None,
+    trusted: frozenset[int],
+    login_known: bool = True,
+    windows: bool = False,
+    drive_path: bool = False,
+) -> bool:
+    """Lehnt einen Ordner ab, den ein nicht vertrautes Konto austauschen könnte; `True`, wenn andere darin schreiben."""
+    if folder is None or folder.permissions is None or folder.uid not in trusted:
+        raise _SwappableFolder(login_known, windows, drive_path)
+    if not folder.permissions & _WRITABLE_FOR_OTHERS:
+        return False
+    # Mit Sticky-Bit darf nur der Besitzer eines Eintrags ihn umbenennen oder löschen.
+    if not folder.permissions & statmod.S_ISVTX:
+        raise _SwappableFolder(login_known, windows, drive_path)
+    return True
+
+
+_DRIVE = re.compile(r"[A-Za-z]:")
+
+
+async def _write_target(sftp: Any, path: PurePosixPath, windows: bool = False) -> tuple[str, Any | None]:
+    """Der vollständig aufgelöste Pfad, auf den geschrieben wird, Teil für Teil von `/` aus geprüft, mit den bei der
+    Prüfung gelesenen Attributen des Ziels (`None`, wenn es fehlt)."""
+    # Der Zugang ist oft root, und SFTP kennt kein Öffnen relativ zu einem geprüften Ordner: Jeder Schreibzugriff löst den
+    # Pfad neu auf. Darum muss jeder Ordner, durch den der Gang führt, vor dem Lesen seiner Einträge feststehen, also root
+    # oder dem angemeldeten Konto gehören und für niemanden sonst austauschbar sein.
+    trusted, login_known = await _trusted_uids(sftp)
+    if not path.is_absolute():
+        path = PurePosixPath(str(await sftp.realpath("."))) / path
+    pending = list(reversed(path.parts[1:]))
+    # OpenSSH für Windows meldet als `/` eine virtuelle Wurzel mit den Laufwerken (uid 0, Rechte 0o777), in der sich nichts
+    # anlegen oder austauschen lässt. Nur auf Servern, die in Deck als Windows geführt sind, und nur für den Schritt von `/`
+    # in ein Laufwerk; jeder andere Schritt von `/` aus und alle Ordner darunter werden weiter geprüft. Ob ein Ordner dort
+    # austauschbar ist, steckt in ACLs, die Deck nicht liest.
+    drive_path = len(path.parts) > 1 and _DRIVE.fullmatch(path.parts[1]) is not None
+    resolved = "/"
+    folders = {"/": await _lstat_or_none(sftp, "/")}
+    hops = 0
+    while pending:
+        part = pending.pop()
+        if part in ("", ".", _FOLDER_REQUIRED):
+            continue
+        if part == "..":
+            resolved = posixpath.dirname(resolved)
+            continue
+        if windows and resolved == "/" and _DRIVE.fullmatch(part):
+            shared = False
+        else:
+            shared = _check_folder(folders[resolved], trusted, login_known, windows, drive_path)
+        candidate = posixpath.join(resolved, part)
+        attrs = await _lstat_or_none(sftp, candidate)
+        if attrs is None:
+            if _FOLDER_REQUIRED in pending:
+                raise _NotAFolder()
+            if shared and pending:
+                raise _SwappableFolder(login_known, windows, drive_path)
+            return posixpath.join(candidate, *reversed(pending)), None
+        if shared and attrs.uid not in trusted:
+            raise _SwappableFolder(login_known, windows, drive_path)
+        if not _is_symlink(attrs):
+            if pending and (attrs.permissions is None or not statmod.S_ISDIR(attrs.permissions)):
+                raise _NotAFolder()
+            folders[candidate] = attrs
+            resolved = candidate
+            continue
+        hops += 1
+        if hops > _MAX_LINK_HOPS or attrs.uid not in trusted:
+            raise _UntrustedLink(login_known)
+        try:
+            link = str(await sftp.readlink(candidate))
+        except Exception as exc:  # `realpath` spränge über weitere Links der Kette, ohne dass sie geprüft würden
+            raise _UncheckableLink() from exc
+        if link.startswith("/"):
+            resolved = "/"
+        # `PurePosixPath` lässt ein abschließendes `/` oder `/.` fallen, das Ziel muss dann aber ein Ordner sein.
+        if link.rsplit("/", 1)[-1] in ("", ".") and "/" in link:
+            pending.append(_FOLDER_REQUIRED)
+        pending.extend(reversed(PurePosixPath(link).parts))
+        if pending and pending[-1] == "/":
+            pending.pop()
+    if resolved == "/":
+        raise _NotAFolder()
+    return resolved, folders[resolved]
 
 
 def _temp_path(target: str, kind: str = "tmp") -> str:
     p = PurePosixPath(target)
     return str(p.with_name(f".{p.name[:100]}.nodvard-{kind}-{secrets.token_hex(6)}"))
-
-
-async def _existing_attrs(sftp: Any, target: str) -> Any | None:
-    try:
-        return await sftp.stat(target)
-    except Exception:  # noqa: BLE001 - neue Datei: es gibt nichts zu übernehmen
-        return None
 
 
 # Rechte der Temp-Datei, solange sie eine bestehende Datei ersetzen soll und geschrieben wird: Die alte Datei kann geheim
@@ -412,8 +622,11 @@ class _SshFileSource:
         # (Link, `..`, zweiter Server-Eintrag) oder scheitert das Lesen, wäre der Inhalt weg.
         host = await self._host()
         async with self._ctx.exec.sftp(host) as sftp:
-            target = await _write_target(sftp, path)
-            old = await _existing_attrs(sftp, target)
+            # Nur die Attribute aus der Prüfung zählen: Fehlte das Ziel, kann ein anderes Konto es inzwischen angelegt haben,
+            # und dann geht es nur über eine exklusiv angelegte Temp-Datei und Umbenennen.
+            target, old = await (
+                _write_target(sftp, path, windows=True) if host.os_family == "windows" else _write_target(sftp, path)
+            )
             if old is not None and old.permissions is not None and not statmod.S_ISREG(old.permissions):
                 # Pipe, Gerät (etwa /dev/null) oder Ordner: Ersetzen machte daraus eine normale Datei, also hineinschreiben
                 # (ein Ordner scheitert dabei sofort).

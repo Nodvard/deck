@@ -32,6 +32,20 @@ _TOKEN_SECRET = "test-secret-uuid"
 _EXPECTED_AUTH = f"PVEAPIToken={_TOKEN_ID}={_TOKEN_SECRET}"
 
 
+def _read_watch_state(state_file):
+    """Zustandsdatei des Wächters als flaches Dict mit lesbaren Schlüsseln (`<Verbindung>--<Job>--<VMID>`, `age:...`)."""
+    data = json.loads(state_file.read_text(encoding="utf-8"))
+    assert data["version"] == 2
+    flat = {f"{e['connection']}--{e['job_id']}--{e['vmid']}": e["state"] for e in data["jobs"]}
+    flat.update({f"age:{e['connection']}--{e['vmid']}": e["state"] for e in data["age"]})
+    return flat
+
+
+@pytest.fixture
+def ext_backups_src(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_EXTENSIONS_DIR / "backups" / "src"))
+
+
 @pytest.fixture(autouse=True)
 def _cleanup_sys_path():
     before = list(sys.path)
@@ -364,6 +378,132 @@ async def test_retry_proposes_through_the_gate_and_reaches_the_real_mock(
     assert state["vzdump_calls"] == [{"node": "pve2"}]
 
 
+@pytest.mark.asyncio
+async def test_retry_rejects_guest_from_another_job(client, db_session, test_settings, mock_backup_api):
+    base_url, state = mock_backup_api
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+
+    retry = await client.post(
+        "/api/v1/ext/backups/jobs/primary--backup-nextcloud--102/retry", headers=_auth_header(token)
+    )
+
+    assert retry.status_code == 400, retry.text
+    assert "gehört nicht zum Backup-Job" in retry.json()["detail"]
+    assert state["vzdump_calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_retry_allows_guest_subset_of_group_job(client, db_session, test_settings, mock_backup_api):
+    base_url, state = mock_backup_api
+    state["jobs"][0]["vmid"] = "100,102"
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+
+    retry = await client.post(
+        "/api/v1/ext/backups/jobs/primary--backup-nextcloud--102/retry", headers=headers
+    )
+    approved = await client.post(f"/api/v1/actions/{retry.json()['action_id']}/approve", headers=headers)
+
+    assert approved.json()["status"] == "succeeded", approved.text
+    assert state["vzdump_params"] == [{
+        "vmid": "102", "storage": "backup-pve1", "mode": "snapshot",
+        "prune-backups": "keep-last=3,keep-weekly=2",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_retry_job_without_vmid_uses_only_its_resolved_guests(
+    client, db_session, test_settings, mock_backup_api
+):
+    base_url, state = mock_backup_api
+    state["jobs"][0].update({"vmid": "", "pool": "kritisch"})
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+
+    allowed = await client.post(
+        "/api/v1/ext/backups/jobs/primary--backup-nextcloud--103/retry", headers=headers
+    )
+    foreign = await client.post(
+        "/api/v1/ext/backups/jobs/primary--backup-nextcloud--100/retry", headers=headers
+    )
+
+    assert allowed.status_code == 200, allowed.text
+    assert foreign.status_code == 400, foreign.text
+
+
+async def _propose_retry(client, headers, job_ref: str) -> str:
+    retry = await client.post(f"/api/v1/ext/backups/jobs/{job_ref}/retry", headers=headers)
+    assert retry.status_code == 200, retry.text
+    return retry.json()["action_id"]
+
+
+@pytest.mark.asyncio
+async def test_retry_is_refused_when_the_job_no_longer_covers_the_guest(
+    client, db_session, test_settings, mock_backup_api
+):
+    base_url, state = mock_backup_api
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    action_id = await _propose_retry(client, headers, "primary--backup-nextcloud--100")
+
+    state["jobs"][0]["vmid"] = "102"
+    refused = (await client.post(f"/api/v1/actions/{action_id}/approve", headers=headers)).json()
+
+    assert refused["status"] == "failed", refused
+    assert "gehört nicht mehr zum Backup-Job" in refused["result"]["error"]
+    assert state["vzdump_calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_retry_is_refused_when_the_guest_left_the_pool_of_the_job(
+    client, db_session, test_settings, mock_backup_api
+):
+    base_url, state = mock_backup_api
+    state["jobs"][0].update({"vmid": "", "pool": "kritisch"})
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    action_id = await _propose_retry(client, headers, "primary--backup-nextcloud--103")
+
+    state["resources"][2].pop("pool")
+    refused = (await client.post(f"/api/v1/actions/{action_id}/approve", headers=headers)).json()
+
+    assert refused["status"] == "failed", refused
+    assert state["vzdump_calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_retry_is_refused_when_the_guest_got_excluded_from_an_all_job(
+    client, db_session, test_settings, mock_backup_api
+):
+    base_url, state = mock_backup_api
+    state["jobs"][0].update({"vmid": "", "all": 1})
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    action_id = await _propose_retry(client, headers, "primary--backup-nextcloud--102")
+
+    state["jobs"][0]["exclude"] = "102"
+    refused = (await client.post(f"/api/v1/actions/{action_id}/approve", headers=headers)).json()
+
+    assert refused["status"] == "failed", refused
+    assert state["vzdump_calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_retry_of_a_pool_job_runs_while_the_guest_stays_in_the_pool(
+    client, db_session, test_settings, mock_backup_api
+):
+    base_url, state = mock_backup_api
+    state["jobs"][0].update({"vmid": "", "pool": "kritisch"})
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    action_id = await _propose_retry(client, headers, "primary--backup-nextcloud--103")
+
+    approved = (await client.post(f"/api/v1/actions/{action_id}/approve", headers=headers)).json()
+
+    assert approved["status"] == "succeeded", approved
+    assert [p["vmid"] for p in state["vzdump_params"]] == ["103"]
+
+
 async def _retry_and_approve(client, headers, job_ref: str) -> dict:
     retry = await client.post(f"/api/v1/ext/backups/jobs/{job_ref}/retry", headers=headers)
     assert retry.status_code == 200, retry.text
@@ -541,7 +681,7 @@ async def test_retry_never_sends_tmpdir_because_proxmox_takes_it_only_from_root(
     from nodvard_sdk.actions import ActionRequest
 
     calls: list = []
-    job = {"id": "j", "storage": "s", "tmpdir": "/mnt/tmp", "compress": "zstd", "prune-backups": "keep-last=2"}
+    job = {"id": "j", "vmid": "100", "storage": "s", "tmpdir": "/mnt/tmp", "compress": "zstd", "prune-backups": "keep-last=2"}
     executor = _executor_with_fake_http(job, calls)
     from nodvard_deck_ext_backups.job_edit import vzdump_options
 
@@ -618,7 +758,7 @@ async def test_retry_passes_remove_0_of_the_job_to_proxmox():
     from nodvard_sdk.actions import ActionRequest
 
     calls: list = []
-    job = {"id": "j", "storage": "s", "prune-backups": "keep-last=1", "remove": 0}
+    job = {"id": "j", "vmid": "100", "storage": "s", "prune-backups": "keep-last=1", "remove": 0}
     executor = _executor_with_fake_http(job, calls)
     from nodvard_deck_ext_backups.job_edit import vzdump_options
 
@@ -1001,8 +1141,8 @@ async def test_one_unreachable_connection_does_not_hide_the_other_jobs_or_stop_t
     notes = await _backup_notifications(db_session)
     assert [n[0] for n in notes] == ["critical"]
     assert notes[0][1].startswith("Backup fehlgeschlagen: ")
-    alerted = _json.loads(state_file.read_text(encoding="utf-8"))
-    assert set(alerted) == {"pve1--backup-x--104", real["100"]["job_ref"]}  # der verschwundene pve2-Job ist vergessen
+    alerted = _read_watch_state(state_file)
+    assert set(alerted) == {"pve1--backup-x--104", f"primary--{real['100']['job_id']}--100"}  # der verschwundene pve2-Job ist vergessen
 
 
 @pytest.mark.asyncio
@@ -1125,11 +1265,16 @@ async def test_connections_crud_full_round_trip(client, db_session, test_setting
     after_token = await client.get("/api/v1/ext/backups/connections", headers=headers)
     assert after_token.json()[0]["has_token"] is True
 
-    updated = await client.put(
+    # Mit Token schaltet die Route die Zertifikatsprüfung nicht ab, das geht nur im Kern mit Passwort.
+    refused = await client.put(
         "/api/v1/ext/backups/connections/pve2", json={"tls_insecure_skip_verify": True}, headers=headers,
     )
+    assert refused.status_code == 409, refused.text
+    updated = await client.put("/api/v1/ext/backups/connections/pve2", json={"enabled": False}, headers=headers)
     assert updated.status_code == 200, updated.text
-    assert updated.json()["tls_insecure_skip_verify"] is True
+    assert updated.json()["enabled"] is False
+    assert updated.json()["tls_insecure_skip_verify"] is False
+    assert updated.json()["base_url"] == "https://192.168.1.23:8006"  # unverändert, nur ein Feld gepatcht
 
     deleted = await client.delete("/api/v1/ext/backups/connections/pve2", headers=headers)
     assert deleted.status_code == 204, deleted.text
@@ -1354,7 +1499,7 @@ async def test_jobs_for_all_guests_or_a_pool_are_expanded_not_silently_dropped(c
     jobs = (await client.get("/api/v1/ext/backups/jobs", headers=_auth_header(token))).json()
     by_job = {}
     for row in jobs:
-        by_job.setdefault(row["job_ref"].split("--")[1], []).append(row["vmid"])
+        by_job.setdefault(row["job_id"], []).append(row["vmid"])
     # all + exclude 102 + nur Knoten "pve2": 100 und 103, nicht 104 (pve1).
     assert by_job == {"backup-all-pve2": ["100", "103"], "backup-pool": ["103", "104"]}
     assert next(r for r in jobs if r["vmid"] == "100")["last_status"] == "failed"
@@ -1737,7 +1882,7 @@ async def test_backup_age_reports_an_old_backup_once_and_the_recovery_with_a_new
     assert (await _run_backup_watch())["notified"] == 0
     assert await _backup_notifications(db_session) == [("warning", "Backup zu alt: Monitoring-VM"), ("info", "Backup wieder aktuell: Monitoring-VM")]
     state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
-    assert not [k for k in json.loads(state_file.read_text(encoding="utf-8")) if k.startswith("age:")]
+    assert not [k for k in _read_watch_state(state_file) if k.startswith("age:")]
 
 
 GRACE = 6 * 3600
@@ -1866,12 +2011,12 @@ async def test_backup_age_forgets_a_vm_that_moves_to_the_skip_list(client, db_se
     state["tasks"][1] = _vzdump(2, 102, ago=9 * DAY)
     await _run_backup_watch()
     state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
-    assert "age:primary--102" in json.loads(state_file.read_text(encoding="utf-8"))
+    assert "age:primary--102" in _read_watch_state(state_file)
     record = await db_session.get(ExtensionRecord, "backups")
     record.settings = {**record.settings, "backup_age_skip": ["102"]}
     await db_session.flush()
     assert (await _run_backup_watch())["notified"] == 0
-    assert "age:primary--102" not in json.loads(state_file.read_text(encoding="utf-8"))
+    assert "age:primary--102" not in _read_watch_state(state_file)
 
 
 @pytest.mark.asyncio
@@ -1944,7 +2089,7 @@ def _age_state_keys() -> list[str]:
     state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
     if not state_file.exists():
         return []
-    return sorted(k for k in json.loads(state_file.read_text(encoding="utf-8")) if k.startswith("age:"))
+    return sorted(k for k in _read_watch_state(state_file) if k.startswith("age:"))
 
 
 async def _body_of(db_session, title: str) -> str:
@@ -2255,7 +2400,7 @@ async def test_backup_age_keeps_failure_alarms_working_if_the_check_itself_break
     assert (await _run_backup_watch())["notified"] == 0
     assert await _backup_notifications(db_session) == [("critical", "Backup fehlgeschlagen: Docker-VM")]
     state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
-    assert any(k.endswith("--100") for k in json.loads(state_file.read_text(encoding="utf-8")))
+    assert any(k.endswith("--100") for k in _read_watch_state(state_file))
 
 
 @pytest.mark.asyncio
@@ -2279,9 +2424,53 @@ async def test_backup_age_leaves_an_unreachable_connection_alone_and_keeps_its_s
     state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text(json.dumps({"age:pve1--104": 500, "age:primary--999": 500, "pve1--backup-x--104": 500}), encoding="utf-8")
     assert (await _run_backup_watch())["notified"] == 0
-    assert set(json.loads(state_file.read_text(encoding="utf-8"))) == {"age:pve1--104", "pve1--backup-x--104"}, (
+    assert set(_read_watch_state(state_file)) == {"age:pve1--104", "pve1--backup-x--104"}, (
         "die nicht erreichbare Verbindung behaelt ihren Zustand, die verschwundene VM auf der erreichbaren verliert ihn"
     )
+
+
+@pytest.mark.asyncio
+async def test_watch_state_with_old_keys_survives_the_new_reference_format(client, db_session, test_settings, mock_backup_api):
+    base_url, state = mock_backup_api
+    token = await _setup_backups(client, db_session, test_settings, base_url, name="pve--west")
+    state["tasks"] = [_vzdump(1, 100, ago=3600), _vzdump(2, 102, ago=7200)]
+    state["backup_files"] = {}
+    headers = _auth_header(token)
+    jobs = (await client.get("/api/v1/ext/backups/jobs", headers=headers)).json()
+    job = next(j for j in jobs if j["vmid"] == "100")
+    old_job_key = f"pve--west--{job['job_id']}--100"
+    assert job["job_ref"] != old_job_key
+    state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({old_job_key: 500, "age:pve--west--100": 500}), encoding="utf-8")
+
+    assert (await _run_backup_watch())["notified"] == 2, "beide offenen Alarme bekommen ihre Entwarnung"
+    assert [severity for severity, _title in await _backup_notifications(db_session)] == ["info", "info"]
+    assert _read_watch_state(state_file) == {}
+
+
+@pytest.mark.asyncio
+async def test_old_age_key_of_a_connection_without_jobs_gets_its_all_clear(client, db_session, test_settings, mock_backup_api):
+    base_url, state = mock_backup_api
+    token = await _setup_backups(client, db_session, test_settings, base_url, name="pve--west")
+    from nodvard_deck.models import Host
+
+    db_session.add(Host(name="vm-102", display_name="Monitoring-VM", address="192.168.2.102", provider_ext_id="proxmox", provider_ref="pve--west/qemu/pve2/102"))
+    await db_session.flush()
+    state["jobs"] = []
+    state["tasks"] = [_vzdump(1, 999, ago=3600)]  # nur damit ein Knoten bekannt ist
+    state["not_backed_up"] = [{"vmid": 102, "name": "Monitoring", "type": "qemu"}]
+    state["backup_files"] = {"backup-pve1": [
+        {"volid": "backup-pve1:backup/vzdump-qemu-102-a.vma.zst", "vmid": 102, "subtype": "qemu", "ctime": int(time.time()) - 600, "size": 1},
+    ]}
+    assert (await client.get("/api/v1/ext/backups/jobs", headers=_auth_header(token))).json() == []
+    state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"age:pve--west--102": 500}), encoding="utf-8")
+
+    assert (await _run_backup_watch())["notified"] == 1, "der offene Alarm wird entwarnt, auch ohne Job der Verbindung"
+    assert [severity for severity, _title in await _backup_notifications(db_session)] == ["info"]
+    assert _read_watch_state(state_file) == {}
 
 
 @pytest.mark.asyncio
@@ -2636,6 +2825,12 @@ def test_backed_up_disk_bytes_counts_only_what_vzdump_saves():
     assert backed_up_disk_bytes("qemu", {"memory": "2048"}) is None
 
 
+def test_backed_up_disk_bytes_counts_nvme_disks(ext_backups_src):
+    from nodvard_deck_ext_backups.space import backed_up_disk_bytes
+
+    assert backed_up_disk_bytes("qemu", {"nvme0": "local:vm-100-disk-0,size=64G"}) == 64 * 1024**3
+
+
 @pytest.mark.asyncio
 async def test_job_edit_warns_when_the_new_storage_is_too_small(client, db_session, test_settings, mock_backup_api):
     """Speicher eines bestehenden Jobs wechseln: alle Gaeste des Jobs muessen dort Platz haben."""
@@ -2816,3 +3011,305 @@ async def test_backups_connector_4xx_gives_a_fixed_sentence_and_normal_answers_p
         await connector._request("GET", "/version")
     connector, _ = _backups_connector_answering(200, b'{"data": null}')
     assert await connector._request("DELETE", "/x") is None
+
+
+@pytest.mark.asyncio
+async def test_simple_old_job_ref_still_works(client, db_session, test_settings, mock_backup_api):
+    base_url, state = mock_backup_api
+    state["jobs"] = [{"id": "nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 02:30", "enabled": 1, "node": "pve2"}]
+    token = await _setup_backups_connections(client, db_session, test_settings, [
+        {"name": "other", "base_url": base_url, "token_id": _TOKEN_ID},
+        {"name": "pve", "base_url": base_url, "token_id": _TOKEN_ID},
+    ])
+    headers = _auth_header(token)
+
+    res = await client.get("/api/v1/ext/backups/jobs/pve--nightly--100/config", headers=headers)
+    assert res.status_code == 200, res.text
+    assert res.json()["job_id"] == "nightly"
+    history = await client.get("/api/v1/ext/backups/jobs/pve--nightly--100/history", headers=headers)
+    assert history.status_code == 200, history.text
+
+
+@pytest.mark.asyncio
+async def test_old_job_ref_with_double_dash_in_connection_name_is_refused(
+    client, db_session, test_settings, mock_backup_api
+):
+    base_url, state = mock_backup_api
+    state["jobs"] = [{"id": "nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 02:30", "enabled": 1, "node": "pve2"}]
+    token = await _setup_backups_connections(client, db_session, test_settings, [
+        {"name": "other", "base_url": base_url, "token_id": _TOKEN_ID},
+        {"name": "pve--west", "base_url": base_url, "token_id": _TOKEN_ID},
+    ])
+
+    res = await client.get("/api/v1/ext/backups/jobs/pve--west--nightly--100/config", headers=_auth_header(token))
+    assert res.status_code == 409, res.text
+
+
+@pytest.mark.asyncio
+async def test_old_job_ref_is_refused_after_the_other_connection_was_deleted(
+    client, db_session, test_settings, mock_backup_api
+):
+    """Nur `pve--west` ist übrig: die Kennung `pve--west--nightly--100` darf nicht mehr als eindeutig gelten."""
+    base_url, state = mock_backup_api
+    state["jobs"] = [{"id": "nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 02:30", "enabled": 1, "node": "pve2"}]
+    token = await _setup_backups_connections(client, db_session, test_settings, [
+        {"name": "pve--west", "base_url": base_url, "token_id": _TOKEN_ID},
+    ])
+
+    res = await _edit_old_ref(client, token)
+    assert res.status_code == 409, res.text
+    assert "neu laden" in res.json()["detail"]
+    assert "job_updates" not in state
+
+
+@pytest.mark.asyncio
+async def test_old_job_ref_matching_two_jobs_is_refused_with_a_reload_hint(
+    client, db_session, test_settings, mock_backup_api
+):
+    base_url, state = mock_backup_api
+    state["jobs"] = [
+        {"id": "nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 02:30", "enabled": 1, "node": "pve2"},
+        {"id": "west--nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 03:30", "enabled": 1, "node": "pve2"},
+    ]
+    token = await _setup_backups_connections(client, db_session, test_settings, [
+        {"name": "pve", "base_url": base_url, "token_id": _TOKEN_ID},
+        {"name": "pve--west", "base_url": base_url, "token_id": _TOKEN_ID},
+    ])
+    headers = _auth_header(token)
+
+    res = await client.post(
+        "/api/v1/ext/backups/jobs/pve--west--nightly--100/edit", json={"changes": {"schedule": "sun 03:00"}}, headers=headers
+    )
+    assert res.status_code == 409, res.text
+    assert "neu laden" in res.json()["detail"]
+    assert "job_updates" not in state
+
+
+@pytest.mark.asyncio
+async def test_old_job_ref_matching_two_jobs_is_a_conflict_on_retry_too(
+    client, db_session, test_settings, mock_backup_api
+):
+    base_url, state = mock_backup_api
+    state["jobs"] = [
+        {"id": "nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 02:30", "enabled": 1, "node": "pve2"},
+        {"id": "west--nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 03:30", "enabled": 1, "node": "pve2"},
+    ]
+    token = await _setup_backups_connections(client, db_session, test_settings, [
+        {"name": "pve", "base_url": base_url, "token_id": _TOKEN_ID},
+        {"name": "pve--west", "base_url": base_url, "token_id": _TOKEN_ID},
+    ])
+    res = await client.post("/api/v1/ext/backups/jobs/pve--west--nightly--100/retry", json={}, headers=_auth_header(token))
+    assert res.status_code == 409, res.text
+    assert "neu laden" in res.json()["detail"]
+
+
+async def _edit_old_ref(client, token, ref="pve--west--nightly--100"):
+    return await client.post(
+        f"/api/v1/ext/backups/jobs/{ref}/edit", json={"changes": {"schedule": "sun 03:00"}}, headers=_auth_header(token)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_job", [
+    None,
+    {"id": "west--nightly", "vmid": "200", "storage": "backup-pve1", "schedule": "*-*-* 03:30", "enabled": 1, "node": "pve2"},
+])
+async def test_old_job_ref_stays_ambiguous_when_the_other_job_is_gone_or_changed(
+    client, db_session, test_settings, mock_backup_api, second_job
+):
+    """Gelöschter Job oder andere VM-Auswahl am zweiten Server ändert nichts: zwei mögliche Zerlegungen sind ein 409."""
+    base_url, state = mock_backup_api
+    state["jobs"] = [{"id": "nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 02:30", "enabled": 1, "node": "pve2"}]
+    if second_job:
+        state["jobs"].append(second_job)
+    token = await _setup_backups_connections(client, db_session, test_settings, [
+        {"name": "pve", "base_url": base_url, "token_id": _TOKEN_ID},
+        {"name": "pve--west", "base_url": base_url, "token_id": _TOKEN_ID},
+    ])
+
+    res = await _edit_old_ref(client, token)
+    assert res.status_code == 409, res.text
+    assert "job_updates" not in state
+
+
+@pytest.mark.asyncio
+async def test_old_job_ref_stays_ambiguous_with_a_disabled_connection(client, db_session, test_settings, mock_backup_api):
+    base_url, state = mock_backup_api
+    state["jobs"] = [{"id": "nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 02:30", "enabled": 1, "node": "pve2"}]
+    token = await _setup_backups_connections(client, db_session, test_settings, [
+        {"name": "pve", "base_url": base_url, "token_id": _TOKEN_ID, "enabled": False},
+        {"name": "pve--west", "base_url": base_url, "token_id": _TOKEN_ID},
+    ])
+
+    res = await _edit_old_ref(client, token)
+    assert res.status_code == 409, res.text
+    assert "job_updates" not in state
+
+
+def test_split_legacy_job_ref_needs_exactly_one_reading(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "extensions" / "backups" / "src"))
+    from nodvard_deck_ext_backups.capabilities import split_legacy_job_ref
+
+    try:
+        assert split_legacy_job_ref("a--b--100") == ("a", "b", "100")
+        for ref in ("pve--west--nightly--100", "pve---nightly--100", "pve--y---100", "a--b--x", "--b--100", "a----100"):
+            assert split_legacy_job_ref(ref) is None, ref
+    finally:
+        for name in list(sys.modules):
+            if name.startswith("nodvard_deck_ext_backups"):
+                del sys.modules[name]
+
+
+@pytest.mark.asyncio
+async def test_old_job_ref_with_one_connection_down_is_refused_not_redirected(
+    client, db_session, test_settings, mock_backup_api
+):
+    base_url, state = mock_backup_api
+    state["jobs"] = [{"id": "nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 02:30", "enabled": 1, "node": "pve2"}]
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    closed_port = sock.getsockname()[1]
+    sock.close()
+    token = await _setup_backups_connections(client, db_session, test_settings, [
+        {"name": "pve", "base_url": f"http://127.0.0.1:{closed_port}", "token_id": _TOKEN_ID},
+        {"name": "pve--west", "base_url": base_url, "token_id": _TOKEN_ID},
+    ])
+
+    res = await client.post(
+        "/api/v1/ext/backups/jobs/pve--west--nightly--100/edit",
+        json={"changes": {"schedule": "sun 03:00"}}, headers=_auth_header(token),
+    )
+    assert res.status_code == 409, res.text
+    assert "neu laden" in res.json()["detail"]
+    assert "job_updates" not in state
+
+
+def _watch_ctx():
+    import logging
+    from types import SimpleNamespace
+
+    return SimpleNamespace(logger=logging.getLogger("test"))
+
+
+def test_legacy_state_is_translated_once_and_ambiguous_keys_are_dropped(ext_backups_src, tmp_path):
+    from nodvard_deck_ext_backups.capabilities import _job_ref
+    from nodvard_deck_ext_backups.watch import _load_state, age_key
+
+    rows = [
+        {"connection": "~2d", "job_id": "nightly", "vmid": "100", "job_ref": _job_ref("~2d", "nightly", "100")},
+        {"connection": "-", "job_id": "nightly", "vmid": "100", "job_ref": _job_ref("-", "nightly", "100")},
+        {"connection": "a--b", "job_id": "c", "vmid": "1", "job_ref": _job_ref("a--b", "c", "1")},
+        {"connection": "a", "job_id": "b--c", "vmid": "1", "job_ref": _job_ref("a", "b--c", "1")},
+        {"connection": "gone", "job_id": "", "vmid": "", "job_ref": "", "last_status": "unreachable"},
+    ]
+    path = tmp_path / "watch-state.json"
+    path.write_text(json.dumps({
+        "~2d--nightly--100": 1, "---nightly--100": 2, "a--b--c--1": 3, "age:~2d--100": 4, "age:---100": 5,
+        "gone--old--7": 6,
+    }), encoding="utf-8")
+
+    state = _load_state(_watch_ctx(), path, rows)
+
+    assert state[_job_ref("~2d", "nightly", "100")] == 1
+    assert state[_job_ref("-", "nightly", "100")] == 2
+    assert state[_job_ref("gone", "old", "7")] == 6, "Zustand einer nicht erreichbaren Verbindung bleibt"
+    assert state[age_key("~2d", "100")] == 4
+    assert state[age_key("-", "100")] == 5
+    assert _job_ref("a--b", "c", "1") not in state and _job_ref("a", "b--c", "1") not in state, "mehrdeutig: verworfen"
+
+
+def test_legacy_key_fitting_an_unreachable_connection_and_a_listed_job_is_dropped(ext_backups_src, tmp_path):
+    from nodvard_deck_ext_backups.capabilities import _job_ref
+    from nodvard_deck_ext_backups.watch import _load_state
+
+    rows = [
+        {"connection": "a", "job_id": "b--c", "vmid": "100", "job_ref": _job_ref("a", "b--c", "100"), "last_status": "ok"},
+        {"connection": "a--b", "job_id": "", "vmid": "", "job_ref": "", "last_status": "unreachable"},
+    ]
+    path = tmp_path / "watch-state.json"
+    path.write_text(json.dumps({"a--b--c--100": 7}), encoding="utf-8")
+
+    state = _load_state(_watch_ctx(), path, rows)
+
+    assert state == {}, "passt auf zwei Verbindungen: lieber verwerfen als dem falschen Job zuordnen"
+
+
+def test_legacy_key_fitting_a_configured_connection_without_jobs_is_dropped(ext_backups_src, tmp_path):
+    from nodvard_deck_ext_backups.capabilities import _job_ref
+    from nodvard_deck_ext_backups.watch import _load_state
+
+    rows = [
+        {"connection": "a", "job_id": "b--c", "vmid": "100", "job_ref": _job_ref("a", "b--c", "100"), "last_status": "ok"},
+    ]
+    path = tmp_path / "watch-state.json"
+    path.write_text(json.dumps({"a--b--c--100": 7}), encoding="utf-8")
+
+    state = _load_state(_watch_ctx(), path, rows, configured=["a", "a--b"])
+
+    assert state == {}, "die Verbindung a--b ohne Jobs macht die Zuordnung mehrdeutig"
+
+
+def test_state_file_round_trips_with_a_version(ext_backups_src, tmp_path):
+    from nodvard_deck_ext_backups.capabilities import _job_ref
+    from nodvard_deck_ext_backups.watch import _from_entries, _to_entries, age_key
+
+    state = {_job_ref("a--b", "c", "1"): 5, age_key("~x", "9"): {"ok_pending": True}}
+
+    data = _to_entries(state)
+
+    assert data["version"] == 2
+    assert _from_entries(json.loads(json.dumps(data))) == state
+
+
+@pytest.mark.asyncio
+async def test_old_state_of_unreachable_tilde_connection_does_not_stop_the_watch(client, db_session, test_settings, mock_backup_api):
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    dead_port = sock.getsockname()[1]
+    sock.close()
+    base_url, state = mock_backup_api
+    await _setup_backups_connections(
+        client, db_session, test_settings,
+        [
+            {"name": "~x", "base_url": f"http://127.0.0.1:{dead_port}", "token_id": _TOKEN_ID},
+            {"name": "primary", "base_url": base_url, "token_id": _TOKEN_ID},
+        ],
+    )
+    state["tasks"] = [_vzdump(1, 100, ago=3600)]
+    state["backup_files"] = {}
+    state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"~x--nightly--100": 500, "age:~x--104": 500, "kaputt": 1}), encoding="utf-8")
+
+    await _run_backup_watch()
+    kept = _read_watch_state(state_file)
+    assert "~x--nightly--100" in kept, "der Zustand der nicht erreichbaren Verbindung bleibt liegen"
+    assert "age:~x--104" in kept
+
+
+@pytest.mark.asyncio
+async def test_listed_refs_of_colliding_old_names_address_each_job_separately(
+    client, db_session, test_settings, mock_backup_api
+):
+    base_url, state = mock_backup_api
+    state["jobs"] = [
+        {"id": "nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 02:30", "enabled": 1, "node": "pve2"},
+        {"id": "west--nightly", "vmid": "100", "storage": "backup-pve1", "schedule": "*-*-* 03:30", "enabled": 1, "node": "pve2"},
+    ]
+    token = await _setup_backups_connections(client, db_session, test_settings, [
+        {"name": "pve", "base_url": base_url, "token_id": _TOKEN_ID},
+        {"name": "pve--west", "base_url": base_url, "token_id": _TOKEN_ID},
+    ])
+    headers = _auth_header(token)
+
+    listed = await client.get("/api/v1/ext/backups/jobs", headers=headers)
+    assert listed.status_code == 200, listed.text
+    refs = {(r["connection"], r["job_id"]): r["job_ref"] for r in listed.json() if r["vmid"] == "100"}
+    assert refs[("pve", "west--nightly")] != refs[("pve--west", "nightly")]
+
+    for (connection, job_id), ref in refs.items():
+        res = await client.get(f"/api/v1/ext/backups/jobs/{ref}/config", headers=headers)
+        assert res.status_code == 200, res.text
+        assert res.json()["job_id"] == job_id

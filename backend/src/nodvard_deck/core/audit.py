@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import AuditEntry
-from .action_output import hide_audit_detail
+from .action_output import hide_audit_detail, hide_audit_reason
 
 VALID_OUTCOMES = frozenset({"success", "failure", "denied", "proposed"})
 
@@ -74,8 +74,9 @@ async def write_entry(
 
 
 def to_ndjson_line(entry: AuditEntry, *, hide_output: bool = False) -> str:
-    """`hide_output=True` lässt Server-Ausgabe in den Details weg (siehe `action_output`)."""
+    """`hide_output=True` lässt Server-Texte in Begründung und Details weg (siehe `action_output`)."""
     detail = hide_audit_detail(entry.action, entry.detail)[0] if hide_output else entry.detail
+    reason = hide_audit_reason(entry.action, entry.reason)[0] if hide_output else entry.reason
     row = {
         "id": entry.id,
         "ts": entry.ts.isoformat(),
@@ -85,7 +86,7 @@ def to_ndjson_line(entry: AuditEntry, *, hide_output: bool = False) -> str:
         "target_type": entry.target_type,
         "target_id": entry.target_id,
         "outcome": entry.outcome,
-        "reason": entry.reason,
+        "reason": reason,
         "detail": detail,
         "correlation_id": entry.correlation_id,
         "ip": entry.ip,

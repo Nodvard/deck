@@ -127,7 +127,7 @@ describe("Kacheln oben", () => {
       { ...pool("nas", "pve2", 0, "danger"), used_percent: null, total: null, used: null },
     ]);
     render(<ProxmoxNodePage />);
-    await waitFor(() => expect(screen.getByTestId("tile-storage")).toHaveTextContent("nas (pve2) nicht verfügbar"));
+    await waitFor(() => expect(screen.getByTestId("tile-storage")).toHaveTextContent("nas (pve2) nicht erreichbar"));
     expect(screen.getByTestId("tile-storage").querySelector(".text-red-300")).not.toBeNull();
   });
 

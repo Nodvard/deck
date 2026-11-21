@@ -8,6 +8,7 @@ import { CommandPalette, useCommandPaletteHotkey } from "../components/CommandPa
 import { DemoBanner } from "../components/DemoBanner";
 import { DesignNotice } from "../components/DesignNotice";
 import { GlobalDialogs } from "../components/GlobalDialogs";
+import { LiveLimitNotice } from "../components/LiveLimitNotice";
 import { Icon } from "../components/Icon";
 import { NotificationBell } from "../components/NotificationBell";
 import { useUnreadNotifications } from "./NotificationsPage";
@@ -299,6 +300,7 @@ export function AppShell() {
         </header>
         {edition.choose_modules && <DemoBanner />}
         <DesignNotice />
+        <LiveLimitNotice />
         <main ref={mainRef} className="app-backdrop min-h-0 flex-1 overflow-auto">
           <Outlet />
         </main>

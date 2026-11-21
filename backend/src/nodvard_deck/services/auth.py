@@ -116,6 +116,7 @@ SETUP_ATTEMPT_KEY = "einrichtung"
 LOGIN_FAILED_MESSAGE = "Ungültiger Benutzername oder Passwort."
 MFA_EXHAUSTED_MESSAGE = "Zu viele falsche Zwei-Faktor-Codes. Bitte melde dich erneut an."
 MFA_TOKEN_USED_MESSAGE = "Dieser Anmeldeschritt wurde schon abgeschlossen. Bitte melde dich erneut an."
+PASSWORD_CHANGED_MESSAGE = "Das Passwort wurde inzwischen geändert. Bitte melde dich neu an."
 TOTP_CODE_USED_MESSAGE = "Dieser Code wurde schon benutzt. Warte, bis die App einen neuen Code anzeigt."
 
 
@@ -314,6 +315,11 @@ async def _reload_unchanged(
     if two_factor and not two_factor_enabled(current):
         return None
     return current
+
+
+def _password_stamp(secret: str, password_hash: str) -> str:
+    """Fingerabdruck des Passwort-Stands für das Zwischentoken; ändert sich mit jedem neuen Passwort."""
+    return hmac.new(secret.encode("utf-8"), password_hash.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
 
 
 async def _store_rehash(session: AsyncSession, user: User, *, old_hash: str, new_hash: str) -> None:
@@ -811,6 +817,7 @@ async def login(
                 "device_name": device_name,
                 "user_agent": user_agent,
                 "ip": ip,
+                "pws": _password_stamp(secret, user.password_hash),
             },
         )
         # Passwort stimmt: Dieser Versuch zählt nicht, die alten Fehlversuche bleiben aber stehen, bis auch der zweite
@@ -865,6 +872,9 @@ async def verify_mfa(
         or user.totp_confirmed_at is None
     ):
         raise InvalidMfaCode("Zwei-Faktor ist für dieses Konto nicht aktiv.")
+    checked_hash = user.password_hash
+    if not hmac.compare_digest(str(payload.get("pws") or ""), _password_stamp(secret, checked_hash)):
+        raise InvalidMfaCode(PASSWORD_CHANGED_MESSAGE)
 
     # Sechs Ziffern = Authenticator-Code, alles andere = Wiederherstellungs-Code.
     via_recovery = not security.is_totp_code(code)
@@ -889,6 +899,10 @@ async def verify_mfa(
         totp_secret = await vault.read_secret_plaintext(session, keyring, user.totp_secret_id)
         totp_step = match_totp_step(totp_secret, "".join(code.split()))
         valid = totp_step is not None
+    # Vor dem Verbrauchen nachsehen: Ein abgelehnter Abschluss darf weder den Code noch den Versuch verbrauchen.
+    if valid and await _reload_unchanged(session, user.id, password_hash=checked_hash, two_factor=True) is None:
+        login_limit.release(attempt)
+        raise InvalidMfaCode(PASSWORD_CHANGED_MESSAGE)
     # Ein Code gilt nur einmal, ein mfa_token nur für eine Anmeldung (siehe `login_limit.claim_success`).
     replayed = valid and not login_limit.claim_success(attempt, totp_step=totp_step)
     if replayed:
@@ -976,7 +990,10 @@ async def _report_password_guessing(user_id: str) -> None:
                     f"kommst du weiter hinein. {advice}"
                 ),
                 severity="warning",
-                payload={"notification_type": "account.password_attempts", "path": "/settings/account", "tags": ["warning", "key"]},
+                payload={
+                    "notification_type": "account.password_attempts", "account_id": user.id,
+                    "path": "/settings/account", "tags": ["warning", "key"],
+                },
             )
     except Exception:  # noqa: BLE001 - nach der Antwort wartet niemand mehr auf den Fehler
         _log.warning("Meldung zum Durchprobieren des Passworts nicht zugestellt", exc_info=True)
@@ -997,7 +1014,10 @@ async def _report_mfa_guessing(session: AsyncSession, user: User) -> None:
                 "für ein Update) gehen erst wieder, wenn die Sperre vorbei ist."
             ),
             severity="warning",
-            payload={"notification_type": "account.totp_attempts", "path": "/settings/account", "tags": ["warning", "key"]},
+            payload={
+                "notification_type": "account.totp_attempts", "account_id": user.id,
+                "path": "/settings/account", "tags": ["warning", "key"],
+            },
         )
     except Exception:  # noqa: BLE001 - die Antwort an den Anrufer geht vor
         _log.warning("Meldung zum Durchprobieren des 2FA-Codes nicht zugestellt", exc_info=True)
@@ -1085,7 +1105,10 @@ async def report_recovery_use(
                 f"Warst du das nicht, {advice}."
             ),
             severity="warning",
-            payload={"notification_type": "account.recovery_used", "path": "/settings/account", "tags": ["warning", "key"]},
+            payload={
+                "notification_type": "account.recovery_used", "account_id": user.id,
+                "path": "/settings/account", "tags": ["warning", "key"],
+            },
         )
     except Exception:  # noqa: BLE001 - die Aktion selbst ist längst gelungen
         _log.warning("Meldung zum Wiederherstellungs-Code nicht zugestellt", exc_info=True)
@@ -1131,7 +1154,12 @@ async def _redeem_refresh_token(
     token_row = result.scalar_one_or_none()
 
     now = utcnow()
-    if token_row is None or token_row.expires_at < now:
+    if token_row is None:
+        raise invalid
+    if token_row.expires_at < now:
+        # Ein Dieb kann kurz vor dem Ablauf erneuern; die Kopie muss auch dann enden, wenn der alte Token zurückkommt.
+        if _reused_after_grace(token_row, now):
+            await _end_reused_chain(session, token_row.user_id, token_row.id)
         raise invalid
 
     if token_row.revoked_at is not None:
@@ -1188,6 +1216,9 @@ async def _grace_tokens(
     # Ohne neuen Refresh-Token: So entsteht keine zweite Sitzungskette und die Laufzeit wächst nicht.
     successor = await _grace_successor(session, token_row, now)
     if successor is None:
+        # In der Frist kann ein verspäteter Tab die Kette schon zweimal erneuert sehen; das ist noch keine Kopie.
+        if _reused_after_grace(token_row, now):
+            await _end_reused_chain(session, token_row.user_id, token_row.id)
         raise invalid
     user = await session.get(User, token_row.user_id)
     if user is None or not user.is_active:
@@ -1219,6 +1250,43 @@ async def _grace_successor(
     ):
         return None
     return successor
+
+
+def _reused_after_grace(token_row: RefreshToken, now: datetime) -> bool:
+    # Nur widerrufene Tokens; ohne Nachfolger findet `_end_reused_chain` kein offenes Kettenende und tut nichts.
+    return token_row.revoked_at is not None and now - token_row.revoked_at > timedelta(seconds=REFRESH_GRACE_SECONDS)
+
+
+async def _end_reused_chain(session: AsyncSession, user_id: str, token_id: str) -> None:
+    """Ein schon erneuerter Token kommt nach der Gnadenfrist wieder: Eine Kopie ist im Umlauf, die Kette endet."""
+    revoked = 0
+    start = token_id
+    while True:
+        end = await session_chain_end(session, user_id, start, max_hops=SESSION_CHAIN_LIMIT)
+        if end is None:
+            break
+        if end.too_long:
+            revoked = await revoke_refresh_tokens(session, user_id)
+            break
+        if end.revoked_at is not None:
+            break
+        ended = await session.execute(
+            update(RefreshToken)
+            .where(RefreshToken.id == end.id, RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=utcnow())
+            .execution_options(synchronize_session=False)
+        )
+        if ended.rowcount:
+            revoked = ended.rowcount
+            break
+        start = end.id
+    if not revoked:
+        return
+    await audit_service.log(
+        session, actor_type="user", actor_id=user_id, action="auth.refresh_reused", outcome="failure",
+        target_type="user", target_id=user_id, detail={"signed_out_sessions": revoked},
+    )
+    await _commit_before_raising(session)
 
 
 @dataclass(frozen=True)
@@ -1273,7 +1341,7 @@ async def session_chain_end(
     fehlt oder einem anderen Konto gehört."""
     # Bekannte Grenze: Die Kette sagt nicht, wer erneuert hat. Hat jemand mit einem abgegriffenen Cookie die Kette
     # weitergedreht, bleibt dessen Sitzung erhalten, solange der Wechsel noch mit dem alten Zugangs-Token kommt
-    # (höchstens `access_token_ttl_seconds`).
+    # (höchstens `access_token_ttl_seconds`); sie endet, sobald der eigene, überholte Token wieder auftaucht.
     # Eine Abfrage statt einer je Schritt: Abmelden braucht nur den Refresh-Token und hat keine Bremse, eine lange
     # Kette darf es nicht teuer machen.
     params = {"user_id": user_id, "token_id": token_id, "max_hops": max_hops}
@@ -1328,17 +1396,13 @@ async def revoke_refresh_tokens(
             keep = None if end.too_long else end.id
     if keep is not None:
         stmt = stmt.where(RefreshToken.id != keep)
-        # Vorgänger der behaltenen Sitzung (durch Rotation widerrufen) sollen auch keine Gnadenfrist mehr bekommen,
-        # sonst käme ein alter Token 30 s lang trotz Passwortwechsel noch an einen Access-Token. Die Kette bleibt,
-        # ältere Zugangs-Tokens dieser Sitzung (andere Tabs) gelten damit weiter.
+        # Kein Token des Kontos behält die Gnadenfrist, auch nicht ältere Vorgänger der behaltenen Sitzung: Wer die
+        # Kette mehrfach weitergedreht hat, endet so, sobald einer davon wiederkommt. Die Kette bleibt, ältere
+        # Zugangs-Tokens dieser Sitzung (andere Tabs) gelten damit weiter.
         grace_over = utcnow() - timedelta(seconds=REFRESH_GRACE_SECONDS + 1)
         await session.execute(
             update(RefreshToken)
-            .where(
-                RefreshToken.user_id == user_id,
-                RefreshToken.replaced_by_id == keep,
-                RefreshToken.revoked_at > grace_over,
-            )
+            .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at > grace_over)
             .values(revoked_at=grace_over)
         )
     result = await session.execute(stmt)

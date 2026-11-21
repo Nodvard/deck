@@ -6,6 +6,7 @@ des echten Home-Ordners ein Testordner (`HOME`). Der setsid-Weg wird echt geprü
 from __future__ import annotations
 
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -216,20 +217,23 @@ def test_poll_parsing_handles_every_state():
 
 @posix
 def test_quoting_end_to_end_paths_with_spaces_reach_docker_exactly(tmp_path):
-    """`apply_script` durch `launch_command` (sh -c in setsid): ein `docker`-Stub schreibt
-    seine Argumente Zeile für Zeile auf -- sie müssen genau stimmen."""
+    """Der entkoppelte Lauf behält Projektordner und Argumente bei."""
     ia = _ia()
     bindir = tmp_path / "bin"
     record = tmp_path / "argv"
+    folder = tmp_path / "mein stack"
+    folder.mkdir()
+    cwd = tmp_path / "cwd"
     # `docker image inspect` meldet eine ANDERE ID als die laufende: der Pull hat etwas Neues gebracht.
     _stub(bindir, "docker", (
         f'if [ "$1 $2" = "image inspect" ]; then echo sha256:{"9" * 64}; exit 0; fi\n'
-        f'for a in "$@"; do printf "%s\\n" "$a" >>{record}; done; printf "%s\\n" -- >>{record}\n'
+        f'if [ "$1" = compose ]; then pwd >>{shlex.quote(str(cwd))}; fi\n'
+        f'for a in "$@"; do printf "%s\\n" "$a" >>{shlex.quote(str(record))}; done; printf "%s\\n" -- >>{shlex.quote(str(record))}\n'
     ))
     t = ia.ComposeTarget(
         container="web", container_id="a" * 64, image="nginx:1.27", image_id="sha256:" + "1" * 64, project="mein-projekt", service="web",
-        working_dir="/opt/mein stack", config_files=("/opt/mein stack/docker-compose.yml", "/opt/mein stack/override 2.yml"),
-        env_files=("/opt/mein stack/prod.env",), config_hash=None,
+        working_dir=str(folder), config_files=(str(folder / "docker-compose.yml"), str(folder / "override 2.yml")),
+        env_files=(str(folder / "prod.env"),), config_hash=None,
     )
     script = ia.apply_script(t, old_image_id="sha256:" + "1" * 64, rollback=ia.rollback_ref("web"))
     env = _env(tmp_path, bindir)
@@ -237,9 +241,10 @@ def test_quoting_end_to_end_paths_with_spaces_reach_docker_exactly(tmp_path):
     assert launch.started
     p = _poll(env)
     assert (p.state, p.rc, p.step) == ("done", 0, "done"), p
+    assert cwd.read_text().splitlines() == [str(folder), str(folder)]
     calls = [c.split("\n") for c in record.read_text().split("\n--\n") if c]
-    common = ["compose", "--ansi", "never", "-p", "mein-projekt", "--project-directory", "/opt/mein stack",
-              "-f", "/opt/mein stack/docker-compose.yml", "-f", "/opt/mein stack/override 2.yml", "--env-file", "/opt/mein stack/prod.env"]
+    common = ["compose", "--ansi", "never", "-p", "mein-projekt", "--project-directory", str(folder),
+              "-f", str(folder / "docker-compose.yml"), "-f", str(folder / "override 2.yml"), "--env-file", str(folder / "prod.env")]
     assert calls == [
         common + ["pull", "web"],
         ["tag", "sha256:" + "1" * 64, "lattice-rollback/web-4b5e57f6:previous"],
@@ -252,8 +257,8 @@ def test_a_failing_pull_stops_the_script_with_rc_10_and_never_recreates(tmp_path
     ia = _ia()
     bindir = tmp_path / "bin"
     record = tmp_path / "calls"
-    _stub(bindir, "docker", f'echo "$*" >>{record}; case "$*" in *pull*) echo "toomanyrequests: rate limit" >&2; exit 1;; esac\n')
-    t = ia.ComposeTarget("web", "a" * 64, "nginx:1.27", "sha256:" + "1" * 64, "p", "web", "/opt/p", ("/opt/p/c.yml",), (), None)
+    _stub(bindir, "docker", f'echo "$*" >>{shlex.quote(str(record))}; case "$*" in *pull*) echo "toomanyrequests: rate limit" >&2; exit 1;; esac\n')
+    t = ia.ComposeTarget("web", "a" * 64, "nginx:1.27", "sha256:" + "1" * 64, "p", "web", str(tmp_path), (str(tmp_path / "c.yml"),), (), None)
     env = _env(tmp_path, bindir)
     _launch(ia.apply_script(t, old_image_id=t.image_id, rollback=ia.rollback_ref("web")), env)
     p = _poll(env)
@@ -261,6 +266,7 @@ def test_a_failing_pull_stops_the_script_with_rc_10_and_never_recreates(tmp_path
     assert "toomanyrequests" in p.output
     calls = record.read_text().splitlines()
     assert any(" pull web" in c for c in calls) and not any(" up " in c for c in calls)
+    assert not any(c.startswith("tag ") for c in calls)
     assert ia.describe_pull_failure(p.output).startswith("Abruflimit der Registry")
 
 
@@ -353,14 +359,14 @@ def test_lock_names_are_checked():
 def _docker_stub(bindir: Path, record: Path, *, inspect_id: str, pull_rc: int = 0) -> None:
     _stub(bindir, "docker", (
         f'if [ "$1 $2" = "image inspect" ]; then echo {inspect_id}; exit 0; fi\n'
-        f'echo "$*" >>{record}\n'
+        f'echo "$*" >>{shlex.quote(str(record))}\n'
         f'case "$*" in *" pull "*) exit {pull_rc};; esac\n'
     ))
 
 
 def _run_script(tmp_path: Path, bindir: Path):
     ia = _ia()
-    t = ia.ComposeTarget("web", "a" * 64, "nginx:1.27", "sha256:" + "1" * 64, "p", "web", "/opt/p", ("/opt/p/c.yml",), (), None)
+    t = ia.ComposeTarget("web", "a" * 64, "nginx:1.27", "sha256:" + "1" * 64, "p", "web", str(tmp_path), (str(tmp_path / "c.yml"),), (), None)
     env = _env(tmp_path, bindir)
     _launch(ia.apply_script(t, old_image_id=t.image_id, rollback=ia.rollback_ref("web")), env)
     return _poll(env)

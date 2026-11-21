@@ -205,7 +205,7 @@ async def test_manual_realtime_preflight_reaches_gate(shield_api, db_session, fa
         "@@clamd\n/usr/sbin/clamd\n@@clamonacc\n/usr/sbin/clamonacc\n@@clamd_state\ninactive\n"
         "@@clamonacc_state\ninactive\n@@root\nhelper\n@@apt\nyes\n@@end\n"
     ), "")
-    headers = await _login(shield_api.client, db_session, "realtime-manager", permissions=("soc.manage",))
+    headers = await _login(shield_api.client, db_session, "realtime-manager", permissions=("soc.manage", "hosts.execute"))
     response = await shield_api.client.post(
         f"/api/v1/ext/shield/defender/realtime/{shield_api.host.id}", headers=headers, json={"enable": True},
     )
@@ -240,7 +240,7 @@ async def test_ban_preflight_uses_scoped_deck_address(shield_api, db_session, fa
     with pytest.raises(ActionBlocked):
         await ctx.exec.run(host, ix.DECK_ADDRESS_COMMAND)
 
-    headers = await _login(shield_api.client, db_session, "ban-manager", permissions=("soc.manage",))
+    headers = await _login(shield_api.client, db_session, "ban-manager", permissions=("soc.manage", "hosts.execute"))
     response = await shield_api.client.post(
         f"/api/v1/ext/shield/defender/hosts/{host.id}/ban",
         headers={**headers, "X-Forwarded-For": browser}, json={"ip": ip, "jail": "sshd", "unban": unban},
@@ -287,7 +287,7 @@ async def test_manual_quarantine_moves_finding(shield_api, db_session, monkeypat
         return await original(conn, command, **kwargs)
 
     monkeypatch.setattr(ssh, "run", run)
-    headers = await _login(shield_api.client, db_session, "quarantine-manager", permissions=("soc.manage",))
+    headers = await _login(shield_api.client, db_session, "quarantine-manager", permissions=("soc.manage", "hosts.execute"))
     response = await shield_api.client.post(
         "/api/v1/ext/shield/defender/findings/finding1/quarantine", headers=headers,
     )

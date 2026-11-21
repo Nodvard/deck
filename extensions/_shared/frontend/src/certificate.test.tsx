@@ -102,6 +102,53 @@ describe("ConnectionCertificate", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("merkt den Fingerabdruck bei hinterlegtem Token über den Kern, mit Passwort, nur für diese Verbindung", async () => {
+    const onSaved = vi.fn();
+    const calls = mockFetch([
+      { body: { sha256: NEW, trusted: false, stored: OLD, stored_invalid: false, matches: false } },
+      { status: 409, body: { detail: "Für „proxmox-token:pve 1“ liegen Zugangsdaten im Tresor.", code: "stored_secret" } },
+      { status: 403, body: { detail: "Bitte Passwort.", code: "confirm_required", two_factor: false } },
+      { body: { values: {} } },
+      { body: { sha256: NEW, trusted: false, stored: NEW, stored_invalid: false, matches: true } },
+    ]);
+    const ask = vi.fn().mockResolvedValue({ current_password: "pw" });
+    window.__nodvardDeck.confirmIdentity = ask;
+    const path = "/api/v1/ext/proxmox/connections/pve%201/certificate";
+    render(<ConnectionCertificate extId="proxmox" connection="pve 1" onSaved={onSaved} />);
+    await screen.findByTestId("certificate-changed");
+    fireEvent.click(screen.getByRole("checkbox", { name: /stimmt mit dem in Proxmox überein/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Neuen Fingerabdruck bestätigen" }));
+
+    await screen.findByTestId("certificate-matches");
+    expect(ask).toHaveBeenCalledWith("Bitte Passwort.", false);
+    // Keine Liste aus dem Browser: eine inzwischen angelegte Verbindung samt Token bleibt so erhalten.
+    expect(calls.map((c) => [c.method, c.url])).toEqual([
+      ["GET", path], ["POST", path], ["PUT", "/api/v1/extensions/proxmox/settings/fingerprint"],
+      ["PUT", "/api/v1/extensions/proxmox/settings/fingerprint"], ["GET", path],
+    ]);
+    expect(calls[2].body).toEqual({ connection: "pve 1", sha256: NEW });
+    expect(calls[3].body).toEqual({ connection: "pve 1", sha256: NEW, current_password: "pw" });
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("ändert nichts, wenn die Passwort-Rückfrage abgebrochen wird", async () => {
+    const onSaved = vi.fn();
+    const calls = mockFetch([
+      { body: { sha256: NEW, trusted: false, stored: OLD, stored_invalid: false, matches: false } },
+      { status: 409, body: { detail: "Zugangsdaten im Tresor.", code: "stored_secret" } },
+      { status: 403, body: { detail: "Bitte Passwort.", code: "confirm_required", two_factor: false } },
+    ]);
+    window.__nodvardDeck.confirmIdentity = vi.fn().mockResolvedValue(null);
+    render(<ConnectionCertificate extId="backups" connection="pve1" onSaved={onSaved} />);
+    await screen.findByTestId("certificate-changed");
+    fireEvent.click(screen.getByRole("checkbox", { name: /stimmt mit dem in Proxmox überein/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Neuen Fingerabdruck bestätigen" }));
+
+    await waitFor(() => expect(calls).toHaveLength(3));
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("certificate-matches")).not.toBeInTheDocument();
+  });
+
   it("sagt bei einer streng prüfenden Verbindung nicht „wird nicht geprüft“", async () => {
     mockFetch([{ body: { sha256: OLD, trusted: false, stored: null, stored_invalid: false, matches: false } }]);
     render(<ConnectionCertificate extId="proxmox" connection="pve1" />);

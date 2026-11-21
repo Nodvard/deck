@@ -27,10 +27,11 @@ from ...models import User
 from ...services import audit as audit_service
 from ...services import backups as backups_service
 from ...services import restore as restore_service
+from ...services import session_guard
 from ...services import update_check as update_check_service
 from ...services import update_helper as update_helper_service
 from ...version import __version__
-from ..deps import CurrentUser, OwnerUser, SessionDep, SettingsDep, require_permission
+from ..deps import CurrentUser, OwnerUser, SessionDep, SettingsDep, VerifiedSessionId, require_permission
 from ..models import RequestModel
 from ..responses import error_responses, file_responses
 from ..proxy_headers import SCOPE_KEY as FORWARDING_SCOPE_KEY
@@ -621,7 +622,8 @@ def _ticket_out(ticket) -> dict:
     responses=error_responses(400, 401, 403, 404, 409, 422, 429, 503, 507),
 )
 async def prepare_download(
-    payload: DownloadIn, request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep
+    payload: DownloadIn, request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep,
+    login_id: VerifiedSessionId,
 ) -> JSONResponse:
     """Baut die verschlüsselte Datei im Hintergrund. Stand über `GET .../download-jobs/{job_id}`, danach die Datei über
     `GET .../download/{ticket}` (einmalig, 5 Minuten). Verlangt Passwort und bei aktivem Zwei-Faktor den Code
@@ -631,7 +633,10 @@ async def prepare_download(
         return refused
     await session.commit()
     try:
-        ticket = await backups_service.prepare_download(settings, user_id=user.id, mode=payload.mode, password=payload.password)
+        ticket = await backups_service.prepare_download(
+            settings, user_id=user.id, mode=payload.mode, password=payload.password,
+            login_id=login_id, stamp=session_guard.credential_stamp(user),
+        )
     except (BackupError, ValueError) as exc:
         raise _http_error(exc) from exc
     return JSONResponse(_ticket_out(ticket), status_code=status.HTTP_202_ACCEPTED, headers=_NO_STORE)
@@ -668,7 +673,7 @@ async def download_status(ticket: str, user: OwnerUser) -> JSONResponse:
 )
 async def download(ticket: str, session: SessionDep):
     """Browser-Download ohne Anmelde-Header: das Ticket ist die Berechtigung. Es gilt genau einmal, 5 Minuten, und nur,
-    solange sein Nutzer noch aktiver Owner ist."""
+    solange sein Nutzer noch aktiver Owner ist und die ausstellende Anmeldung mit unverändertem Passwort gilt."""
     registry = get_ticket_registry()
     pending = registry.get(ticket)
     if pending is not None and pending.status == "building":
@@ -677,7 +682,11 @@ async def download(ticket: str, session: SessionDep):
     if found is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes oder abgelaufenes Ticket.")
     owner = await session.get(User, found.user_id)
-    if owner is None or not owner.is_active or not owner.is_owner:
+    watch = session_guard.SessionWatch(user_id=found.user_id, stamp=found.stamp, login_id=found.login_id)
+    if (
+        owner is None or not owner.is_active or not owner.is_owner or not found.login_id
+        or await watch.ended_reason(session) is not None
+    ):
         if found.delete_after:
             _unlink(found.path)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes oder abgelaufenes Ticket.")
@@ -704,14 +713,17 @@ def _unlink(path) -> None:
 
 @router.post("/backups/{name}/ticket", responses=error_responses(400, 401, 403, 404, 409, 422, 429, 503, 507))
 async def stored_backup_ticket(
-    name: str, payload: StoredDownloadIn, request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep
+    name: str, payload: StoredDownloadIn, request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep,
+    login_id: VerifiedSessionId,
 ) -> JSONResponse:
     """Ticket für eine gespeicherte Sicherung. Bestätigung wie bei `POST /system/backups/download`."""
     refused = await _confirm_with_code(request, session, settings, user, payload, "sicherung_herunterladen")
     if refused is not None:
         return refused
     try:
-        ticket = await backups_service.ticket_for_stored(settings, session, user_id=user.id, name=name)
+        ticket = await backups_service.ticket_for_stored(
+            settings, session, user_id=user.id, name=name, login_id=login_id, stamp=session_guard.credential_stamp(user),
+        )
     except (BackupError, FileNotFoundError) as exc:
         raise _http_error(exc) from exc
     return JSONResponse(_ticket_out(ticket), headers=_NO_STORE)

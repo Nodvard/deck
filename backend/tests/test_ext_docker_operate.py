@@ -510,7 +510,7 @@ async def test_stopping_on_an_operate_host_goes_through_the_gate_and_the_helper(
 
     async def run(target, command, timeout_s=60):
         calls.append((target.name, command))
-        return result()
+        return result('[{"Config": {"Image": "nginx:1"}}]\n' if command.endswith(" inspect web") else "")
 
     monkeypatch.setattr(docker_on.handle, "run", run)
     proposed = await client.post(f"/api/v1/hosts/{host.id}/actions/container.stop",
@@ -518,8 +518,12 @@ async def test_stopping_on_an_operate_host_goes_through_the_gate_and_the_helper(
     assert proposed.status_code == 202, proposed.text
     approved = await client.post(f"/api/v1/actions/{proposed.json()['id']}/approve", headers=docker_on.owner)
     assert approved.json()["status"] == "succeeded", approved.text
-    # Erst die ID (Nodvard Deck stoppt sich nicht selbst), dann der Befehl, beides über das Hilfsskript.
-    assert calls == [("nur-lesen", f"sudo -n {HELPER} id web"), ("nur-lesen", f"sudo -n {HELPER} stop web")]
+    # Erst ID und Image (Nodvard Deck stoppt sich nicht selbst), dann der Befehl, alles über das Hilfsskript.
+    assert calls == [
+        ("nur-lesen", f"sudo -n {HELPER} id web"),
+        ("nur-lesen", f"sudo -n {HELPER} inspect web"),
+        ("nur-lesen", f"sudo -n {HELPER} stop web"),
+    ]
 
 
 @pytest.mark.asyncio
