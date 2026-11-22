@@ -167,3 +167,50 @@ async def test_orphaned_results_do_not_displace_current_hosts_or_lower_their_sco
     assert removed["summary"]["hosts"] == removed["summary"]["hosts_known"] == 0
     assert removed["summary"]["score_reasons"] == []
     service.host_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_open_findings_stay_listed_behind_many_newer_resolved_ones(client, db_session, tmp_path, shield):
+    """Viele neuere, erledigte Funde dürfen offene nicht aus der Liste drängen (Zähler und Liste aus einer Menge)."""
+    token = await _bootstrap_owner(client)
+    created = await client.post("/api/v1/hosts", headers=_auth_header(token),
+                                json={"name": "server-viel", "address": "192.0.2.20", "tags": ["shield"]})
+    assert created.status_code == 201, created.text
+    host_id = created.json()["id"]
+    connection = await db_session.connection()
+    await connection.run_sync(shield.models.Base.metadata.create_all)
+    await db_session.commit()
+    manifest = tomllib.loads((EXT_DIR / "extension.toml").read_text(encoding="utf-8"))["extension"]
+    _, _, context = _build(tmp_path, ext_id=manifest["id"], legacy_ids=manifest["legacy_ids"], permissions=["hosts.read"])
+    ctx = SimpleNamespace(
+        db=context.db, hosts=context.hosts,
+        settings=SimpleNamespace(get=AsyncMock(return_value={}), core=AsyncMock(return_value="UTC")),
+        notify=SimpleNamespace(send=AsyncMock()),
+    )
+    service = shield.defender.Defender(ctx)
+    service.host_status = AsyncMock(return_value={"reachable": False, "clamav_installed": False})
+    now = datetime.now(UTC)
+
+    def finding(name: str, status: str, age: timedelta):
+        return shield.models.FindingRecord(
+            id=name, scan_id="scan", host_id=host_id, host_name="server-viel", path=f"/srv/{name}",
+            signature="Test.Signature", status=status, detected_at=now - age, status_changed_at=now - age,
+        )
+
+    async with ctx.db.session() as db:
+        db.add(shield.models.ScanRecord(id="scan", host_id=host_id, host_name="server-viel", kind="deep",
+                                        trigger="manual", status="infected", infected=345, started_at=now - timedelta(days=9)))
+        db.add_all([finding(f"offen-{i}", "detected", timedelta(days=8, minutes=i)) for i in range(75)])
+        db.add_all([finding(f"tresor-{i}", "quarantined", timedelta(days=7, minutes=i)) for i in range(5)])
+        db.add_all([finding(f"weg-{i}", "deleted", timedelta(minutes=i)) for i in range(265)])
+
+    overview = await service.overview()
+    assert overview["summary"]["open_threats"] == 75
+    listed = await service.list_findings()
+    assert sum(1 for f in listed if f["status"] == "detected") == 75
+    assert sum(1 for f in listed if f["status"] == "quarantined") == 5
+    # Erledigtes bleibt begrenzt, die Reihenfolge bleibt „neueste zuerst“.
+    assert sum(1 for f in listed if f["status"] == "deleted") == 200
+    stamps = [f["detected_at"] for f in listed]
+    assert stamps == sorted(stamps, reverse=True)
+    assert len(await service.list_findings(status="detected")) == 75

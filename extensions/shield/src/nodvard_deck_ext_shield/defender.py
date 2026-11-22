@@ -1583,11 +1583,17 @@ class Defender:
 
     async def list_findings(self, *, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         ids = [h.id for h in await self._ctx.hosts.list()]
-        stmt = select(FindingRecord).where(FindingRecord.host_id.in_(ids)).order_by(FindingRecord.detected_at.desc()).limit(limit)
-        if status:
-            stmt = stmt.where(FindingRecord.status == status)
+        base = select(FindingRecord).where(FindingRecord.host_id.in_(ids)).order_by(FindingRecord.detected_at.desc())
         async with self._ctx.db.session() as session:
-            return [finding_out(r) for r in (await session.execute(stmt)).scalars()]
+            if status:
+                return [finding_out(r) for r in (await session.execute(base.where(FindingRecord.status == status).limit(limit))).scalars()]
+            # Offene Funde und Quarantäne dürfen nie hinter neueren, erledigten Funden verschwinden: Die Grenze
+            # gilt nur für Erledigtes. Sonst zählt die Übersicht Bedrohungen, die die Liste nicht zeigt.
+            active = FindingRecord.status.in_(ACTIVE_FINDING_STATUSES)
+            rows = list((await session.execute(base.where(active).limit(ACTIVE_FINDINGS_LIMIT))).scalars())
+            rows += list((await session.execute(base.where(~active).limit(limit))).scalars())
+            rows.sort(key=lambda r: r.detected_at, reverse=True)
+            return [finding_out(r) for r in rows]
 
     async def latest_audits(self) -> list[dict[str, Any]]:
         ids = [h.id for h in await self._ctx.hosts.list()]
@@ -1603,6 +1609,10 @@ class Defender:
         row = await self._finding(finding_id)
         return finding_out(row) if row else None
 
+
+# Zustände, die in der Liste „Funde & Quarantäne“ immer vollständig erscheinen, und ihre Obergrenze je Abruf.
+ACTIVE_FINDING_STATUSES = ("detected", "quarantined")
+ACTIVE_FINDINGS_LIMIT = 5000
 
 DEFAULT_CRONS = {"quick": "0 2 * * *", "deep": "30 3 * * 0", "audit": "0 1 * * *", "briefing": "0 7 * * *"}
 

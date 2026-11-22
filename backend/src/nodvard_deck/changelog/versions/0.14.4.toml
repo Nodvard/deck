@@ -1,0 +1,8 @@
+version = "0.14.4"
+date = "2026-11-22"
+title = "Korrektur für Shield"
+
+[[entries]]
+kind = "behoben"
+text = "Unter „Quarantäne“ erscheinen offene Funde wieder vollständig. Bisher fehlten sie in der Liste, wenn es mehr als 200 neuere, schon erledigte Funde gab; die Zahl im Reiter stimmte, die Liste darunter blieb leer."
+bereich = "shield"

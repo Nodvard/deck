@@ -10,6 +10,15 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.14.4] – 2026-11-22
+
+Bugfix release with one change.
+
+### Fixed
+
+- Shield: open findings are listed completely again under “Quarantäne”. They were missing from the list when
+  more than 200 newer findings had already been handled, while the number on the tab still counted them.
+
 ## [0.14.3] – 2026-11-21
 
 Security and bugfix release: permissions in Shield, the audit log and live messages, login renewal, stored
